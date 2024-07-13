@@ -1,0 +1,14 @@
+paths:
+    /stats/{channel_id}/{ad_word}/{start_date}/{max_results}:
+        get:
+            description: Этот эндпоинт возвращает CSV-файл со статистикой видео.
+            operationId: getStatsHandler
+            responses:
+                "200":
+                    $ref: '#/responses/file'
+                "500":
+                    $ref: '#/responses/string'
+            summary: Получение статистики видео по идентификатору канала, ключевому слову для рекламы, дате начала и максимальному количеству результатов.
+            tags:
+                - stats
+swagger: "2.0"

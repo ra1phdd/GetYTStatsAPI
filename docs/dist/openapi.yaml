@@ -21,23 +21,23 @@ paths:
                 - stats
             parameters:
                 - name: channel_id
-                  in: path
+                  in: query
                   required: true
                   type: string
                   description: ID канала на YouTube (пример, UCNPUUqi4kqjeaScWtsvfyvw)
                 - name: ad_word
-                  in: path
+                  in: query
                   required: true
                   type: string
                   description: Ключевое слово для рекламы из описания (пример, LOLZTEAM)
                 - name: start_date
-                  in: path
+                  in: query
                   required: true
                   type: string
-                  format: date
+                  format: string
                   description: Дата старта рекламы в формате YYYY-MM-DD (пример, 2024-07-14)
                 - name: max_results
-                  in: path
+                  in: query
                   required: false
                   type: integer
                   description: Максимальное количество видео, по которым сервис будет осуществлять подсчёт статистики

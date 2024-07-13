@@ -1,14 +1,52 @@
+swagger: "2.0"
+info:
+    version: 1.0.0
+    title: GetYTStatsAPI
+    description: '
+        <p>Проект представляет собой API для получения статистики видео, подсчёта общего количества просмотров, и экспорта в CSV файл.</p>
+
+        <h2>Как работать с документацией?</h2>
+        <p>Для отправки запросов к API нажмите на кнопку Try it out и заполните необходимые поля для составления нужного фильтра.
+        После заполнения полей нажмите на кнопку Execute и получите ответ от API и пример запроса.</p>
+        
+        <p>По вопросам работы с API обращайтесь <a href="https://t.me/ra1ph_d">сюда</a></p>
+        <p>Если вы обнаружили ошибку или у вас есть предложения по улучшению, создавайте issue на <a href="https://github.com/ra1phdd/GetYTStatsAPI">GitHub</a>.</p>'
 paths:
-    /stats/{channel_id}/{ad_word}/{start_date}/{max_results}:
+    /get_stats:
         get:
+            summary: Получение статистики видео по идентификатору канала, ключевому слову для рекламы, дате начала и максимальному количеству результатов.
             description: Этот эндпоинт возвращает CSV-файл со статистикой видео.
             operationId: getStatsHandler
-            responses:
-                "200":
-                    $ref: '#/responses/file'
-                "500":
-                    $ref: '#/responses/string'
-            summary: Получение статистики видео по идентификатору канала, ключевому слову для рекламы, дате начала и максимальному количеству результатов.
             tags:
                 - stats
-swagger: "2.0"
+            parameters:
+                - name: channel_id
+                  in: path
+                  required: true
+                  type: string
+                  description: ID канала на YouTube (пример, UCNPUUqi4kqjeaScWtsvfyvw)
+                - name: ad_word
+                  in: path
+                  required: true
+                  type: string
+                  description: Ключевое слово для рекламы из описания (пример, LOLZTEAM)
+                - name: start_date
+                  in: path
+                  required: true
+                  type: string
+                  format: date
+                  description: Дата старта рекламы в формате YYYY-MM-DD (пример, 2024-07-14)
+                - name: max_results
+                  in: path
+                  required: false
+                  type: integer
+                  description: Максимальное количество видео, по которым сервис будет осуществлять подсчёт статистики
+            responses:
+                '200':
+                    description: CSV-файл со статистикой видео
+                    schema:
+                        type: file
+                '500':
+                    description: Внутренняя ошибка сервера
+                    schema:
+                        type: string

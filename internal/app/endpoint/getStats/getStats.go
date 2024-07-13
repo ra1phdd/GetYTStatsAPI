@@ -30,10 +30,10 @@ type Endpoint struct {
 //	200: file
 //	500: string
 func (e Endpoint) GetStatsHandler(c *gin.Context) {
-	channelId := c.Param("channel_id")
-	adWord := c.Param("ad_word")
-	startDate := c.Param("start_date")
-	maxResultsStr := c.Param("max_results")
+	channelId := c.Query("channel_id")
+	adWord := c.Query("ad_word")
+	startDate := c.Query("start_date")
+	maxResultsStr := c.Query("max_results")
 
 	date, err := time.Parse("2006-01-02", startDate)
 	if err != nil {

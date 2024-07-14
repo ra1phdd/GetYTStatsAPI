@@ -19,8 +19,6 @@ paths:
             summary: Получение статистики видео по идентификатору канала, ключевому слову для рекламы, дате начала и максимальному количеству результатов.
             description: Этот эндпоинт возвращает команду для вставки в Excel (Google Sheets)
             operationId: getCommandHandler
-            tags:
-                - stats
             parameters:
                 - name: channel_id
                   in: query

@@ -11,12 +11,14 @@ info:
         <h2>Как работать с документацией?</h2>
         <p>Для отправки запросов к API нажмите на кнопку Try it out и заполните необходимые поля для составления нужного фильтра.
         После заполнения полей нажмите на кнопку Execute и получите ответ от API и пример запроса.</p>'
+host: 91.215.21.236:8089
+basePath: /
 paths:
-    /get_stats:
+    /get_command:
         get:
             summary: Получение статистики видео по идентификатору канала, ключевому слову для рекламы, дате начала и максимальному количеству результатов.
-            description: Этот эндпоинт возвращает CSV-файл со статистикой видео.
-            operationId: getStatsHandler
+            description: Этот эндпоинт возвращает команду для вставки в Excel (Google Sheets)
+            operationId: getCommandHandler
             tags:
                 - stats
             parameters:
@@ -43,9 +45,9 @@ paths:
                   description: Максимальное количество видео, по которым сервис будет осуществлять подсчёт статистики
             responses:
                 '200':
-                    description: CSV-файл со статистикой видео
+                    description: Команда для вставки в Excel (Google Sheets)
                     schema:
-                        type: file
+                        type: string
                 '500':
                     description: Внутренняя ошибка сервера
                     schema:

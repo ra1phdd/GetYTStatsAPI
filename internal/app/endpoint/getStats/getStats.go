@@ -2,6 +2,7 @@ package getStats
 
 import (
 	"GetYTStatsAPI/internal/app/models"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"os"
@@ -18,17 +19,15 @@ type Endpoint struct {
 	GetStats GetStats
 }
 
-// GetStatsHandler получает статистику видео по заданным параметрам
-//
-// swagger:route GET /stats/{channel_id}/{ad_word}/{start_date}/{max_results} stats getStatsHandler
-//
-// Получение статистики видео по идентификатору канала, ключевому слову для рекламы, дате начала и максимальному количеству результатов.
-// Этот эндпоинт возвращает CSV-файл со статистикой видео.
-//
-// Responses:
-//
-//	200: file
-//	500: string
+func (e Endpoint) GetCommandHandler(c *gin.Context) {
+	channelId := c.Query("channel_id")
+	adWord := c.Query("ad_word")
+	startDate := c.Query("start_date")
+	maxResultsStr := c.Query("max_results")
+
+	c.String(http.StatusOK, fmt.Sprintf("=IMPORTDATA(\"http://91.215.21.236:8089/get_stats?channel_id=%s&ad_word=%s&start_date=%s&max_videos=%s\";\";\";\"en_US\")", channelId, adWord, startDate, maxResultsStr))
+}
+
 func (e Endpoint) GetStatsHandler(c *gin.Context) {
 	channelId := c.Query("channel_id")
 	adWord := c.Query("ad_word")

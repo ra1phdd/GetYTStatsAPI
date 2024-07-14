@@ -35,6 +35,7 @@ func New(cfg *config.Configuration) (*App, error) {
 	}
 
 	// регистрируем маршруты
+	a.router.GET("/get_command", serviceStats.GetCommandHandler)
 	a.router.GET("/get_stats", serviceStats.GetStatsHandler)
 
 	err := cache.Init(cfg.Redis.RedisAddr+":"+cfg.Redis.RedisPort, cfg.Redis.RedisUsername, cfg.Redis.RedisPassword, cfg.Redis.RedisDBId)

@@ -174,7 +174,7 @@ func (s Service) CreateCSV(data []models.VideoInfo) (*os.File, error) {
 		} else {
 			record = []string{
 				fmt.Sprint(id),
-				item.PublishDate + ":00",
+				"'" + item.PublishDate,
 				item.Name,
 				item.Views,
 				item.URL,

@@ -25,7 +25,7 @@ func (e Endpoint) GetCommandHandler(c *gin.Context) {
 	startDate := c.Query("start_date")
 	maxResultsStr := c.Query("max_results")
 
-	c.String(http.StatusOK, fmt.Sprintf("=IMPORTDATA(\"http://91.215.21.236:8089/get_stats?channel_id=%s&ad_word=%s&start_date=%s&max_videos=%s\";\";\";\"en_US\")", channelId, adWord, startDate, maxResultsStr))
+	c.String(http.StatusOK, fmt.Sprintf("=IMPORTDATA(\"http://91.215.21.236:8089/get_stats?channel_id=%s&ad_word=%s&start_date=%s&max_videos=%s\";\",\";\"en_US\")", channelId, adWord, startDate, maxResultsStr))
 }
 
 func (e Endpoint) GetStatsHandler(c *gin.Context) {

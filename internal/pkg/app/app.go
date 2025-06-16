@@ -1,57 +1,114 @@
 package app
 
 import (
-	"GetYTStatsAPI/config"
-	"GetYTStatsAPI/internal/app/endpoint/getStats"
-	stats "GetYTStatsAPI/internal/app/services/stats"
-	"GetYTStatsAPI/pkg/cache"
-	"GetYTStatsAPI/pkg/logger"
+	"context"
 	"fmt"
+	"getytstatsapi/internal/app/config"
+	"getytstatsapi/internal/app/handlers"
+	"getytstatsapi/internal/app/middleware"
+	"getytstatsapi/internal/app/services"
+	"getytstatsapi/pkg/cache"
+	"getytstatsapi/pkg/logger"
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
+	"net/http"
+	"time"
+
+	_ "net/http/pprof"
 )
 
 type App struct {
-	getStats *stats.Service
+	cfg   *config.Configuration
+	log   *logger.Logger
+	db    *gorm.DB
+	cache *cache.Cache
 
-	router *gin.Engine
+	services    services.Services
+	middlewares middleware.Middlewares
+	handlers    handlers.Handlers
 }
 
-func New(cfg *config.Configuration) (*App, error) {
-	gin.SetMode(cfg.GinMode)
-
-	logger.Init(cfg.LoggerLevel)
-
-	a := &App{}
-
-	a.router = gin.Default()
-
-	// регистрируем сервисы
-	a.getStats = stats.New(cfg.ApiKey)
-
-	// регистрируем эндпоинты
-	serviceStats := &getStats.Endpoint{
-		GetStats: a.getStats,
+func New() error {
+	a := &App{
+		log: logger.New(),
 	}
 
-	// регистрируем маршруты
-	a.router.GET("/get_command", serviceStats.GetCommandHandler)
-	a.router.GET("/get_stats", serviceStats.GetStatsHandler)
+	if err := a.initConfig(); err != nil {
+		return err
+	}
 
-	err := cache.Init(cfg.Redis.RedisAddr+":"+cfg.Redis.RedisPort, cfg.Redis.RedisUsername, cfg.Redis.RedisPassword, cfg.Redis.RedisDBId)
+	if err := a.initCache(); err != nil {
+		return err
+	}
+
+	a.initServices()
+	a.initHandlers()
+	a.initMiddlewares()
+
+	return a.runServer()
+}
+
+func (a *App) initConfig() (err error) {
+	a.cfg, err = config.NewConfig()
 	if err != nil {
-		logger.Error("ошибка при инициализации кэша: ", zap.Error(err))
-		return nil, err
+		a.log.Error("Error loading config from env", err)
+		return err
 	}
-
-	return a, nil
+	a.log.SetLogLevel(a.cfg.LoggerLevel)
+	return nil
 }
 
-func (a *App) Run(port string) error {
-	err := a.router.Run(fmt.Sprintf(":%s", port))
+func (a *App) initCache() error {
+	ctx := context.Background()
+	client := redis.NewClient(&redis.Options{
+		Addr:     fmt.Sprintf("%s:%d", a.cfg.Redis.Address, a.cfg.Redis.Port),
+		Username: a.cfg.Redis.Username,
+		Password: a.cfg.Redis.Password,
+		DB:       a.cfg.Redis.DB,
+	})
+	err := client.Ping(ctx).Err()
 	if err != nil {
 		return err
 	}
 
+	a.cache = cache.New(a.log, client)
 	return nil
+}
+
+func (a *App) initServices() {
+	a.services.Videos = services.NewVideos(a.log, a.cfg, a.cache)
+}
+
+func (a *App) initHandlers() {
+	a.handlers.Stats = handlers.NewStats(a.log, a.cfg, &a.services)
+}
+
+func (a *App) initMiddlewares() {
+	a.middlewares.Auth = middleware.NewAuth(a.log, &a.services)
+	a.middlewares.Logging = middleware.NewLogging(a.log)
+}
+
+func (a *App) newServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+}
+
+func (a *App) runServer() error {
+	gin.SetMode(a.cfg.GinMode)
+
+	r := gin.Default()
+	r.Use(a.middlewares.Logging.LoggingAPI)
+
+	r.GET("/v1/command/get", a.handlers.Stats.GetCommandHandler)
+	r.GET("/v1/stats/get", a.handlers.Stats.GetStatsHandler)
+
+	a.log.Info("Server is running")
+	return r.Run(fmt.Sprintf(":" + a.cfg.Port))
 }

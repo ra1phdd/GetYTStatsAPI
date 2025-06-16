@@ -1,73 +1,153 @@
 package logger
 
 import (
+	"context"
 	"fmt"
+	multi "github.com/samber/slog-multi"
+	"github.com/shopspring/decimal"
+	"gopkg.in/natefinch/lumberjack.v2"
+	"log/slog"
 	"os"
-
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"runtime"
 )
 
-var logger *zap.Logger
+const (
+	LevelTrace = slog.Level(-8)
+	LevelFatal = slog.Level(12)
+)
 
-func Init(loggerLevel string) {
-	// Логгирование
-	config := zap.NewProductionEncoderConfig()
-	config.EncodeLevel = zapcore.LowercaseLevelEncoder
-	config.EncodeTime = zapcore.ISO8601TimeEncoder
+type Logger struct {
+	log        *slog.Logger
+	level      *slog.LevelVar
+	levelNames map[slog.Leveler]string
+}
 
-	fileEncoder := zapcore.NewJSONEncoder(config)
-	consoleEncoder := zapcore.NewConsoleEncoder(config)
-	logFile, err := os.OpenFile("logs/golog", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Println("Ошибка создания файла golog", err)
+func New() *Logger {
+	l := &Logger{
+		level: &slog.LevelVar{},
+		levelNames: map[slog.Leveler]string{
+			LevelTrace: "TRACE",
+			LevelFatal: "FATAL",
+		},
 	}
-	writer := zapcore.AddSync(logFile)
+	l.level.Set(slog.LevelInfo)
 
-	var defaultLogLevel zapcore.Level
-	switch loggerLevel {
-	case "debug":
-		defaultLogLevel = zapcore.DebugLevel
-	case "warn":
-		defaultLogLevel = zapcore.WarnLevel
-	case "error":
-		defaultLogLevel = zapcore.ErrorLevel
-	case "fatal":
-		defaultLogLevel = zapcore.FatalLevel
-	case "info":
-	default:
-		defaultLogLevel = zapcore.InfoLevel
+	opts := &slog.HandlerOptions{
+		AddSource: true,
+		Level:     l.level,
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.LevelKey {
+				level, ok := a.Value.Any().(slog.Level)
+				if !ok {
+					return a
+				}
+				levelLabel, exists := l.levelNames[level]
+				if !exists {
+					levelLabel = level.String()
+				}
+
+				a.Value = slog.StringValue(levelLabel)
+			}
+			if a.Key == "source" {
+				_, file, line, ok := runtime.Caller(10)
+				if ok {
+					a.Value = slog.StringValue(fmt.Sprintf("%s:%d", file, line))
+				}
+			}
+
+			return a
+		},
 	}
 
-	core := zapcore.NewTee(
-		zapcore.NewCore(fileEncoder, writer, defaultLogLevel),
-		zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), defaultLogLevel),
+	logFile := &lumberjack.Logger{
+		Filename:   "logs/main.log",
+		MaxSize:    64,
+		MaxBackups: 32,
+		MaxAge:     30,
+		Compress:   true,
+	}
+
+	l.log = slog.New(
+		multi.Fanout(
+			slog.NewTextHandler(os.Stdout, opts),
+			slog.NewJSONHandler(logFile, opts),
+		),
 	)
-	logger = zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
-	defer func(logger *zap.Logger) {
-		err := logger.Sync()
-		if err != nil {
 
-		}
-	}(logger)
+	return l
 }
 
-func Debug(message string, fields ...zap.Field) {
-	logger.Debug(message, fields...)
+func (l *Logger) SetLogLevel(levelStr string) {
+	switch levelStr {
+	case "trace":
+		l.level.Set(LevelTrace)
+	case "debug":
+		l.level.Set(slog.LevelDebug)
+	case "info":
+		l.level.Set(slog.LevelInfo)
+	case "warn":
+		l.level.Set(slog.LevelWarn)
+	case "error":
+		l.level.Set(slog.LevelError)
+	case "fatal":
+		l.level.Set(LevelFatal)
+	default:
+		l.level.Set(slog.LevelInfo)
+	}
 }
 
-func Info(message string, fields ...zap.Field) {
-	logger.Info(message, fields...)
+func (l *Logger) GetLogLevel() string {
+	switch l.level.Level() {
+	case LevelTrace:
+		return "trace"
+	case slog.LevelDebug:
+		return "debug"
+	case slog.LevelInfo:
+		return "info"
+	case slog.LevelWarn:
+		return "warn"
+	case slog.LevelError:
+		return "error"
+	case LevelFatal:
+		return "fatal"
+	}
+
+	return "info"
 }
 
-func Warn(message string, fields ...zap.Field) {
-	logger.Warn(message, fields...)
+func (l *Logger) Trace(msg string, args ...any) {
+	l.log.Log(context.Background(), LevelTrace, msg, args...)
 }
 
-func Error(message string, fields ...zap.Field) {
-	logger.Error(message, fields...)
+func (l *Logger) Debug(msg string, args ...any) {
+	l.log.Debug(msg, args...)
 }
 
-func Fatal(message string, fields ...zap.Field) {
-	logger.Fatal(message, fields...)
+func (l *Logger) Info(msg string, args ...any) {
+	l.log.Info(msg, args...)
+}
+
+func (l *Logger) Warn(msg string, args ...any) {
+	l.log.Warn(msg, args...)
+}
+
+func (l *Logger) Error(msg string, err error, args ...any) {
+	if err != nil {
+		l.log.Error(msg, append([]any{slog.Any("error", err.Error())}, args...)...)
+	} else {
+		l.log.Error(msg, args...)
+	}
+}
+
+func (l *Logger) Fatal(msg string, err error, args ...any) {
+	l.log.Log(context.Background(), LevelFatal, msg, append([]any{slog.Any("error", err.Error())}, args...)...)
+	os.Exit(1)
+}
+
+func Uint(key string, v uint) slog.Attr {
+	return slog.Uint64(key, uint64(v))
+}
+
+func Decimal(key string, v decimal.Decimal) slog.Attr {
+	return slog.String(key, v.String())
 }

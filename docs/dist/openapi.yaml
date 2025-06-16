@@ -36,11 +36,12 @@ paths:
                   type: string
                   format: string
                   description: Дата старта рекламы в формате YYYY-MM-DD (пример, 2024-07-14)
-                - name: max_results
+                - name: end_data
                   in: query
                   required: false
-                  type: integer
-                  description: Максимальное количество видео, по которым сервис будет осуществлять подсчёт статистики
+                  type: string
+                  format: string
+                  description: Дата окончания рекламы в формате YYYY-MM-DD (пример, 2024-07-14)
             responses:
                 '200':
                     description: Команда для вставки в Excel (Google Sheets)

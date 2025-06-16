@@ -45,4 +45,4 @@ go run ./cmd/main/main.go
 ```
 
 # Лицензия
-Этот проект лицензируется под лицензией MIT. Подробнее см. [LICENSE](https://github.com/ra1phdd/GetYTStatsAPI/blob/main/LICENSE).
+Этот проект лицензируется под лицензией MIT. Подробнее см. [LICENSE](https://github.com/ra1phdd/GetYTStatsAPI/blob/main/LICENSE).s

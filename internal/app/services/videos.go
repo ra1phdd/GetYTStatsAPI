@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"getytstatsapi/internal/app/config"
 	"getytstatsapi/internal/app/models"
@@ -130,13 +129,7 @@ func (vs *Videos) GetVideos(channelId string, adWord string, startDateStr, endDa
 		}
 	}
 
-	videoMapJSON, err := json.Marshal(videos)
-	if err == nil {
-		vs.cache.Set(cacheKey, videoMapJSON, 5*time.Minute)
-	} else {
-		return nil, err
-	}
-
+	vs.cache.Set(cacheKey, videos, 5*time.Minute)
 	return videos, nil
 }
 

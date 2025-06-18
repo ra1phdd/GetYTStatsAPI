@@ -8,6 +8,7 @@ import (
 	"getytstatsapi/internal/app/models"
 	"getytstatsapi/pkg/cache"
 	"getytstatsapi/pkg/logger"
+	"github.com/google/uuid"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
 	"log/slog"
@@ -134,12 +135,7 @@ func (vs *Videos) GetVideos(channelId string, adWord string, startDateStr, endDa
 }
 
 func (vs *Videos) CreateCSV(data []models.VideoInfo) (*os.File, error) {
-	hash, err := hashMap(data)
-	if err != nil {
-		return nil, err
-	}
-
-	file, err := os.CreateTemp("", fmt.Sprintf("stats-%s.csv", hash))
+	file, err := os.CreateTemp("", fmt.Sprintf("stats-%s.csv", uuid.New()))
 	if err != nil {
 		return nil, err
 	}

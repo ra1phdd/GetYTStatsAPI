@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	multi "github.com/samber/slog-multi"
-	"github.com/shopspring/decimal"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"log/slog"
 	"os"
@@ -142,12 +141,4 @@ func (l *Logger) Error(msg string, err error, args ...any) {
 func (l *Logger) Fatal(msg string, err error, args ...any) {
 	l.log.Log(context.Background(), LevelFatal, msg, append([]any{slog.Any("error", err.Error())}, args...)...)
 	os.Exit(1)
-}
-
-func Uint(key string, v uint) slog.Attr {
-	return slog.Uint64(key, uint64(v))
-}
-
-func Decimal(key string, v decimal.Decimal) slog.Attr {
-	return slog.String(key, v.String())
 }

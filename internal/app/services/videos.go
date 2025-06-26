@@ -37,7 +37,7 @@ func NewVideos(log *logger.Logger, cfg *config.Configuration, cache *cache.Cache
 	}
 }
 
-func (vs *Videos) GetVideos(channelId string, adWord string, startDateStr, endDateStr string) (videos []models.VideoInfo, err error) {
+func (vs *Videos) GetVideos(channelId string, adWord string, startDateStr, endDateStr string, hiddenVideos []string) (videos []models.VideoInfo, err error) {
 	cacheKey := fmt.Sprintf("videos:%s:%s:%s_%s", channelId, adWord, startDateStr, endDateStr)
 	if err = vs.cache.Get(cacheKey, &videos); err == nil {
 		vs.log.Debug("Returning servers from cache", slog.String("cache_key", cacheKey))
@@ -86,6 +86,10 @@ func (vs *Videos) GetVideos(channelId string, adWord string, startDateStr, endDa
 			break
 		}
 		nextPageToken = response.NextPageToken
+	}
+
+	for _, video := range hiddenVideos {
+		videoIds = append(videoIds, video)
 	}
 	vs.log.Debug("Total videos found", slog.Int("count", len(videoIds)))
 

@@ -7,6 +7,7 @@ import (
 	"getytstatsapi/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"strings"
 )
 
 type Stats struct {
@@ -37,8 +38,9 @@ func (s *Stats) GetStatsHandler(c *gin.Context) {
 	adWord := c.Query("ad_word")
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
+	hiddenVideos := c.Query("hidden_videos")
 
-	videos, err := s.servs.Videos.GetVideos(channelId, adWord, startDate, endDate)
+	videos, err := s.servs.Videos.GetVideos(channelId, adWord, startDate, endDate, strings.Split(hiddenVideos, ","))
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
 	}

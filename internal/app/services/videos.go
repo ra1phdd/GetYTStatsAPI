@@ -46,6 +46,7 @@ func (vs *Videos) GetVideos(channelId string, adWord string, startDateStr, endDa
 
 	startDate, err := time.Parse("2006-01-02", startDateStr)
 	if err != nil {
+		vs.log.Error("Error parsing start date", err, slog.String("start_date", startDateStr))
 		return nil, err
 	}
 
@@ -53,84 +54,107 @@ func (vs *Videos) GetVideos(channelId string, adWord string, startDateStr, endDa
 	if endDateStr != "" {
 		endDate, err = time.Parse("2006-01-02", endDateStr)
 		if err != nil {
+			vs.log.Error("Error parsing end date", err, slog.String("end_date", endDateStr))
 			return nil, err
 		}
 	}
 
-	var videoIds []string
+	channelResp, err := vs.youtube.Channels.List([]string{"contentDetails"}).Id(channelId).Do()
+	if err != nil {
+		vs.log.Error("Error getting channel", err, slog.String("channel_id", channelId))
+		return nil, err
+	}
+	if len(channelResp.Items) == 0 {
+		return nil, fmt.Errorf("channel not found: %s", channelId)
+	}
+	uploadPlaylistId := channelResp.Items[0].ContentDetails.RelatedPlaylists.Uploads
+
 	nextPageToken := ""
-
-	for {
-		call := vs.youtube.Search.List([]string{"id"}).
-			ChannelId(channelId).
-			PublishedAfter(startDate.Format(time.RFC3339)).
-			PublishedBefore(endDate.Format(time.RFC3339)).
-			Order("date").
-			Type("video").
-			MaxResults(50)
-
-		if nextPageToken != "" {
-			call = call.PageToken(nextPageToken)
-		}
-
-		response, err := call.Do()
+	done := false
+	for !done {
+		playlistResp, err := vs.youtube.PlaylistItems.List([]string{"contentDetails"}).
+			PlaylistId(uploadPlaylistId).MaxResults(50).PageToken(nextPageToken).Do()
 		if err != nil {
+			vs.log.Error("Error getting playlist", err, slog.String("playlist_id", uploadPlaylistId))
 			return nil, err
 		}
 
-		for _, item := range response.Items {
-			videoIds = append(videoIds, item.Id.VideoId)
+		var videoIds []string
+		for _, item := range playlistResp.Items {
+			videoIds = append(videoIds, item.ContentDetails.VideoId)
 		}
-
-		if response.NextPageToken == "" {
+		if len(videoIds) == 0 {
 			break
 		}
-		nextPageToken = response.NextPageToken
-	}
 
-	for _, video := range hiddenVideos {
-		videoIds = append(videoIds, video)
-	}
-	vs.log.Debug("Total videos found", slog.Int("count", len(videoIds)))
-
-	for i := 0; i < len(videoIds); i += 50 {
-		end := i + 50
-		if end > len(videoIds) {
-			end = len(videoIds)
-		}
-		idsBatch := videoIds[i:end]
-
-		videoCall := vs.youtube.Videos.List([]string{"snippet", "statistics"}).
-			Id(strings.Join(idsBatch, ",")).
-			Fields(
-				"items(" +
-					"etag,id,kind," +
-					"snippet(publishedAt,title,description,thumbnails/default)," +
-					"statistics)",
-			)
-
-		videoResponse, err := videoCall.Do()
+		videoResp, err := vs.youtube.Videos.List([]string{"snippet", "statistics"}).
+			Id(strings.Join(videoIds, ",")).Do()
 		if err != nil {
+			vs.log.Error("Failed to get video", err)
 			return nil, fmt.Errorf("error retrieving video statistics: %w", err)
 		}
 
-		for _, video := range videoResponse.Items {
-			if video.Id == "" {
+		for _, video := range videoResp.Items {
+			if video.Id == "" || video.Snippet == nil || video.Statistics == nil {
 				continue
 			}
-			videoViews := video.Statistics.ViewCount
+
 			videoPublishedAt, err := time.Parse(time.RFC3339, video.Snippet.PublishedAt)
 			if err != nil {
+				vs.log.Error("Error parsing published date", err, slog.String("video", video.Id))
 				return nil, err
 			}
+
+			if videoPublishedAt.Before(startDate) {
+				done = true
+				break
+			}
+
+			if videoPublishedAt.After(endDate) {
+				continue
+			}
+
 			if strings.Contains(video.Snippet.Description, adWord) {
 				videos = append([]models.VideoInfo{{
 					Name:        video.Snippet.Title,
 					PublishDate: videoPublishedAt.Format("2006-01-02 15:04"),
-					Views:       videoViews,
+					Views:       video.Statistics.ViewCount,
 					URL:         fmt.Sprintf("https://www.youtube.com/watch?v=%s", video.Id),
 				}}, videos...)
 			}
+		}
+
+		if playlistResp.NextPageToken == "" {
+			break
+		}
+		nextPageToken = playlistResp.NextPageToken
+	}
+
+	videoResp, err := vs.youtube.Videos.List([]string{"snippet", "statistics"}).
+		Id(strings.Join(hiddenVideos, ",")).Do()
+	if err != nil {
+		vs.log.Error("Failed to get video", err)
+		return nil, fmt.Errorf("error retrieving video statistics: %w", err)
+	}
+
+	for _, video := range videoResp.Items {
+		if video.Id == "" || video.Snippet == nil || video.Statistics == nil {
+			continue
+		}
+
+		videoPublishedAt, err := time.Parse(time.RFC3339, video.Snippet.PublishedAt)
+		if err != nil {
+			vs.log.Error("Error parsing published date", err, slog.String("video", video.Id))
+			return nil, err
+		}
+
+		if strings.Contains(video.Snippet.Description, adWord) {
+			videos = append([]models.VideoInfo{{
+				Name:        video.Snippet.Title,
+				PublishDate: videoPublishedAt.Format("2006-01-02 15:04"),
+				Views:       video.Statistics.ViewCount,
+				URL:         fmt.Sprintf("https://www.youtube.com/watch?v=%s", video.Id),
+			}}, videos...)
 		}
 	}
 

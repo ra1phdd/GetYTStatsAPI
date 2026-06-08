@@ -18,6 +18,7 @@ type GetStatsRequest struct {
 	StartDateRaw string `validate:"required,datetime=2006-01-02"`
 	EndDateRaw   string `validate:"omitempty,datetime=2006-01-02"`
 	HiddenVideos string
+	Columns      []string
 }
 
 func NewGetStatsRequestFromQuery(query map[string][]string) GetStatsRequest {
@@ -27,6 +28,7 @@ func NewGetStatsRequestFromQuery(query map[string][]string) GetStatsRequest {
 		StartDateRaw: firstQueryValue(query, "start_date"),
 		EndDateRaw:   firstQueryValue(query, "end_date"),
 		HiddenVideos: firstQueryValue(query, "hidden_videos"),
+		Columns:      allQueryValues(query, "columns"),
 	}
 }
 
@@ -52,13 +54,44 @@ func (r GetStatsRequest) ToDomain(now time.Time) (domain.StatsQuery, error) {
 		return domain.StatsQuery{}, fmt.Errorf("%w: end_date must not be before start_date", core_errors.ErrInvalidArgument)
 	}
 
+	columns, err := parseStatsColumns(r.Columns)
+	if err != nil {
+		return domain.StatsQuery{}, err
+	}
+
 	return domain.NewStatsQuery(
 		strings.TrimSpace(r.ChannelID),
 		strings.TrimSpace(r.AdWord),
 		startDate,
 		endDate,
 		parseHiddenVideos(r.HiddenVideos),
+		columns,
 	), nil
+}
+
+func parseStatsColumns(raw []string) ([]domain.StatsColumn, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	columns := make([]domain.StatsColumn, 0, len(raw))
+	for _, value := range raw {
+		for _, item := range strings.Split(value, ",") {
+			item = strings.TrimSpace(strings.ToLower(item))
+			if item == "" {
+				continue
+			}
+
+			column := domain.StatsColumn(item)
+			if !domain.IsValidStatsColumn(column) {
+				return nil, fmt.Errorf("%w: unsupported column %q", core_errors.ErrInvalidArgument, item)
+			}
+
+			columns = append(columns, column)
+		}
+	}
+
+	return columns, nil
 }
 
 func parseHiddenVideos(raw string) []string {
@@ -83,4 +116,12 @@ func firstQueryValue(query map[string][]string, key string) string {
 		return ""
 	}
 	return values[0]
+}
+
+func allQueryValues(query map[string][]string, key string) []string {
+	values := query[key]
+	if len(values) == 0 {
+		return nil
+	}
+	return append([]string(nil), values...)
 }

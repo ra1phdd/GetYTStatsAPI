@@ -46,6 +46,7 @@ func TestRecorderStoresFetchedVideos(t *testing.T) {
 		time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC),
 		[]string{"hidden1"},
+		nil,
 	)
 
 	videos, err := repository.GetVideos(context.Background(), query)

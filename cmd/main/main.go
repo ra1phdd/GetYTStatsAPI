@@ -10,8 +10,6 @@ import (
 	health_service "getytstatsapi/internal/entities/health/service"
 	health_http "getytstatsapi/internal/entities/health/transport/http"
 	sponsorblock_repository "getytstatsapi/internal/entities/sponsorblock/repository/sponsorblock"
-	sponsorblock_service "getytstatsapi/internal/entities/sponsorblock/service"
-	sponsorblock_http "getytstatsapi/internal/entities/sponsorblock/transport/http"
 	postgres_stats_repository "getytstatsapi/internal/entities/stats/repository/postgres"
 	youtube_stats_repository "getytstatsapi/internal/entities/stats/repository/youtube"
 	stats_service "getytstatsapi/internal/entities/stats/service"
@@ -52,14 +50,10 @@ func main() {
 	healthRepository := health_repository.NewStaticRepository("getytstatsapi")
 	healthService := health_service.New(healthRepository)
 	healthHandler := health_http.NewHandler(log.Named("health.http"), healthService)
-	sponsorBlockRepository := sponsorblock_repository.New()
-	sponsorBlockService := sponsorblock_service.New(sponsorBlockRepository)
-	sponsorBlockHandler := sponsorblock_http.NewHandler(log.Named("sponsorblock.http"), sponsorBlockService)
 
 	apiV1 := core_http_server.NewAPIVersionRouter(core_http_server.ApiVersion1)
 	apiV1.RegisterRoutes(
 		core_http_server.NewRoute(http.MethodGet, "/health", healthHandler.Get),
-		core_http_server.NewRoute(http.MethodGet, "/sponsorblock/get", sponsorBlockHandler.GetSegments),
 	)
 
 	if strings.TrimSpace(cfg.Features.StintInside.YouTubeAPIKey.String()) == "" {
@@ -72,11 +66,11 @@ func main() {
 
 		historyStore := postgres_stats_repository.NewHistoryStore(db)
 		recordingRepository := postgres_stats_repository.NewRecorder(statsRepository, historyStore)
-		statsService := stats_service.New(recordingRepository)
-		statsHandler := stats_http.NewFromConfig(cfg, log.Named("stats.http"), statsService)
+		sponsorBlockRepository := sponsorblock_repository.New("")
+		statsService := stats_service.New(recordingRepository, sponsorBlockRepository)
+		statsHandler := stats_http.NewHandler(log.Named("stats.http"), statsService)
 
 		apiV1.RegisterRoutes(
-			core_http_server.NewRoute(http.MethodGet, "/command/get", statsHandler.GetCommand),
 			core_http_server.NewRoute(http.MethodGet, "/stats/get", statsHandler.GetStats),
 		)
 	}

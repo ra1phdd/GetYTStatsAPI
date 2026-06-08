@@ -31,6 +31,8 @@ func New(ctx context.Context, apiKey string) (*Repository, error) {
 }
 
 func (r *Repository) GetVideos(ctx context.Context, query domain.StatsQuery) ([]domain.StatsVideo, error) {
+	fetchedAt := time.Now().UTC()
+
 	channelResp, err := r.youtube.Channels.List([]string{"contentDetails"}).Context(ctx).Id(query.ChannelID).Do()
 	if err != nil {
 		return nil, fmt.Errorf("get channel: %w", err)
@@ -64,7 +66,7 @@ func (r *Repository) GetVideos(ctx context.Context, query domain.StatsQuery) ([]
 			break
 		}
 
-		pageVideos, stop, err := r.loadVideosPage(ctx, strings.Join(videoIDs, ","), query)
+		pageVideos, stop, err := r.loadVideosPage(ctx, strings.Join(videoIDs, ","), query, fetchedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -78,7 +80,7 @@ func (r *Repository) GetVideos(ctx context.Context, query domain.StatsQuery) ([]
 	}
 
 	if len(query.HiddenVideos) > 0 {
-		hiddenVideos, _, err := r.loadVideosPage(ctx, strings.Join(query.HiddenVideos, ","), query)
+		hiddenVideos, _, err := r.loadVideosPage(ctx, strings.Join(query.HiddenVideos, ","), query, fetchedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -88,7 +90,7 @@ func (r *Repository) GetVideos(ctx context.Context, query domain.StatsQuery) ([]
 	return videos, nil
 }
 
-func (r *Repository) loadVideosPage(ctx context.Context, ids string, query domain.StatsQuery) ([]domain.StatsVideo, bool, error) {
+func (r *Repository) loadVideosPage(ctx context.Context, ids string, query domain.StatsQuery, fetchedAt time.Time) ([]domain.StatsVideo, bool, error) {
 	videoResp, err := r.youtube.Videos.List([]string{"snippet", "statistics"}).
 		Context(ctx).
 		Id(ids).
@@ -123,12 +125,16 @@ func (r *Repository) loadVideosPage(ctx context.Context, ids string, query domai
 			continue
 		}
 
-		videos = append(videos, domain.NewStatsVideo(
+		statsVideo := domain.NewStatsVideo(
 			video.Snippet.Title,
 			publishedAt,
 			video.Statistics.ViewCount,
 			fmt.Sprintf("https://www.youtube.com/watch?v=%s", video.Id),
-		))
+		)
+		statsVideo.VideoID = video.Id
+		statsVideo.ViewsUpdatedAt = fetchedAt
+
+		videos = append(videos, statsVideo)
 	}
 
 	return videos, stop, nil

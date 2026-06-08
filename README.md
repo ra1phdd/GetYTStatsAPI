@@ -6,7 +6,9 @@
 - Golang
 - REST API (фреймворк Gin)
 ## Базы данных
-- Redis (in-memory)
+- PostgreSQL
+- sqlc
+- goose
 
 ## Документация
 Пользовательскую документацию можно получить по данной [ссылке](https://ra1phdd.github.io/GetYTStatsAPI/).
@@ -26,22 +28,24 @@ go mod download
 ```
 - Создайте файл .env со следующими параметрами:
 ```
-PORT=8080
 LOGGER_LEVEL=warn
-GIN_MODE=release
-API_KEY=YOUR_YOUTUBE_DATA_API_V3_KEY
-REDIS_ADDR=YOUR_REDIS_ADDRESS
-REDIS_PORT=6379
-REDIS_USERNAME=YOUR_REDIS_USERNAME
-REDIS_PASSWORD=YOUR_REDIS_PASSWORD
-REDIS_DB_ID=0
+HTTP_ADDRESS=:8080
+DATABASE_HOST=127.0.0.1
+DATABASE_PORT=5432
+DATABASE_USER=postgres
+DATABASE_PASSWORD=postgres
+DATABASE_NAME=getytstatsapi
+FEATURES_STINTINSIDE_YOUTUBE_API_KEY=YOUR_YOUTUBE_DATA_API_V3_KEY
 ```
-**Примечание**: Значения API_KEY, REDIS_ADDR, REDIS_USERNAME, REDIS_PASSWORD и REDIS_DB_ID являются обязательными.
+**Примечание**: Значения `DATABASE_*` и `FEATURES_STINTINSIDE_YOUTUBE_API_KEY` должны быть заданы.
 
-- Замените YOUR_YOUTUBE_DATA_API_V3_KEY, YOUR_REDIS_ADDRESS, YOUR_REDIS_USERNAME и YOUR_REDIS_PASSWORD на соответствующие значения.
+- Примените миграции:
+```
+go run ./cmd/migrator -direction up
+```
 - Запустите Backend:
 ```
-go run ./cmd/main/main.go
+go run ./cmd/main
 ```
 
 # Лицензия

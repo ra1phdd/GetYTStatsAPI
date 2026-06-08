@@ -2,143 +2,216 @@ package logger
 
 import (
 	"context"
-	"fmt"
-	multi "github.com/samber/slog-multi"
-	"gopkg.in/natefinch/lumberjack.v2"
 	"log/slog"
-	"os"
-	"runtime"
+	"strings"
+	"time"
 )
 
-const (
-	LevelTrace = slog.Level(-8)
-	LevelFatal = slog.Level(12)
-)
+var backgroundContext = context.Background()
 
 type Logger struct {
-	log        *slog.Logger
-	level      *slog.LevelVar
-	levelNames map[slog.Leveler]string
+	*slog.Logger
+	handler   slog.Handler
+	component string
+	level     *slog.LevelVar
+	exit      func(int)
 }
 
-func New() *Logger {
-	l := &Logger{
-		level: &slog.LevelVar{},
-		levelNames: map[slog.Leveler]string{
-			LevelTrace: "TRACE",
-			LevelFatal: "FATAL",
-		},
-	}
-	l.level.Set(slog.LevelInfo)
+type SlogLogger = Logger
 
-	opts := &slog.HandlerOptions{
-		AddSource: true,
-		Level:     l.level,
-		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-			if a.Key == slog.LevelKey {
-				level, ok := a.Value.Any().(slog.Level)
-				if !ok {
-					return a
-				}
-				levelLabel, exists := l.levelNames[level]
-				if !exists {
-					levelLabel = level.String()
-				}
-
-				a.Value = slog.StringValue(levelLabel)
-			}
-			if a.Key == "source" {
-				_, file, line, ok := runtime.Caller(10)
-				if ok {
-					a.Value = slog.StringValue(fmt.Sprintf("%s:%d", file, line))
-				}
-			}
-
-			return a
-		},
+func New(opts ...Option) *Logger {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 
-	logFile := &lumberjack.Logger{
-		Filename:   "logs/main.log",
-		MaxSize:    64,
-		MaxBackups: 32,
-		MaxAge:     30,
-		Compress:   true,
+	level := &slog.LevelVar{}
+	level.Set(cfg.level)
+
+	handler := newRootHandler(cfg, level)
+	return &Logger{
+		Logger:    slog.New(handler),
+		handler:   handler,
+		component: cfg.component,
+		level:     level,
+		exit:      cfg.exit,
 	}
-
-	l.log = slog.New(
-		multi.Fanout(
-			slog.NewTextHandler(os.Stdout, opts),
-			slog.NewJSONHandler(logFile, opts),
-		),
-	)
-
-	return l
 }
 
-func (l *Logger) SetLogLevel(levelStr string) {
-	switch levelStr {
-	case "trace":
-		l.level.Set(LevelTrace)
-	case "debug":
-		l.level.Set(slog.LevelDebug)
-	case "info":
-		l.level.Set(slog.LevelInfo)
-	case "warn":
-		l.level.Set(slog.LevelWarn)
-	case "error":
-		l.level.Set(slog.LevelError)
-	case "fatal":
-		l.level.Set(LevelFatal)
-	default:
-		l.level.Set(slog.LevelInfo)
+func (l *Logger) With(attrs ...Attr) *Logger {
+	if l == nil {
+		return Default().With(attrs...)
 	}
+	return l.clone(l.handler.WithAttrs(attrs))
+}
+
+func (l *Logger) WithGroup(name string) *Logger {
+	if l == nil {
+		return Default().WithGroup(name)
+	}
+	return l.clone(l.handler.WithGroup(name))
+}
+
+func (l *Logger) Named(component string) *Logger {
+	if l == nil {
+		return Default().Named(component)
+	}
+	component = strings.TrimSpace(component)
+	if component == "" {
+		return l
+	}
+	handler := l.handler
+	if withComponentHandler, ok := handler.(interface{ WithComponent(string) slog.Handler }); ok {
+		handler = withComponentHandler.WithComponent(component)
+	}
+	return l.cloneWithComponent(handler, component)
+}
+
+func (l *Logger) Slog() *slog.Logger {
+	if l == nil {
+		return slog.Default()
+	}
+	return l.Logger
+}
+
+func (l *Logger) Handler() slog.Handler {
+	if l == nil || l.handler == nil {
+		return slog.Default().Handler()
+	}
+	return l.handler
+}
+
+func (l *Logger) Enabled(ctx context.Context, level slog.Level) bool {
+	if l == nil || l.Logger == nil {
+		return false
+	}
+	return l.Logger.Enabled(ctx, level)
+}
+
+func (l *Logger) SetLevel(level slog.Level) {
+	if l != nil && l.level != nil {
+		l.level.Set(level)
+	}
+}
+
+func (l *Logger) Level() slog.Level {
+	if l == nil || l.level == nil {
+		return slog.LevelInfo
+	}
+	return l.level.Level()
+}
+
+func (l *Logger) SetLogLevel(level string) {
+	if parsed, ok := parseLevel(level); ok {
+		l.SetLevel(parsed)
+		return
+	}
+	l.SetLevel(slog.LevelInfo)
 }
 
 func (l *Logger) GetLogLevel() string {
-	switch l.level.Level() {
-	case LevelTrace:
-		return "trace"
-	case slog.LevelDebug:
-		return "debug"
-	case slog.LevelInfo:
-		return "info"
-	case slog.LevelWarn:
-		return "warn"
-	case slog.LevelError:
-		return "error"
-	case LevelFatal:
-		return "fatal"
+	return levelString(l.Level())
+}
+
+func (l *Logger) Log(ctx context.Context, level slog.Level, msg string, attrs ...Attr) {
+	if l == nil || l.Logger == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = backgroundContext
+	}
+	if !l.Logger.Enabled(ctx, level) {
+		return
 	}
 
-	return "info"
+	record := slog.NewRecord(time.Now(), level, msg, callerPC())
+	record.AddAttrs(attrs...)
+
+	_ = l.Logger.Handler().Handle(ctx, record)
 }
 
-func (l *Logger) Trace(msg string, args ...any) {
-	l.log.Log(context.Background(), LevelTrace, msg, args...)
+func (l *Logger) Trace(msg string, attrs ...Attr) {
+	l.logWithLevel(backgroundContext, levelTrace, msg, attrs...)
 }
 
-func (l *Logger) Debug(msg string, args ...any) {
-	l.log.Debug(msg, args...)
+func (l *Logger) Debug(msg string, attrs ...Attr) {
+	l.logWithLevel(backgroundContext, slog.LevelDebug, msg, attrs...)
 }
 
-func (l *Logger) Info(msg string, args ...any) {
-	l.log.Info(msg, args...)
+func (l *Logger) Info(msg string, attrs ...Attr) {
+	l.logWithLevel(backgroundContext, slog.LevelInfo, msg, attrs...)
 }
 
-func (l *Logger) Warn(msg string, args ...any) {
-	l.log.Warn(msg, args...)
+func (l *Logger) Warn(msg string, attrs ...Attr) {
+	l.logWithLevel(backgroundContext, slog.LevelWarn, msg, attrs...)
 }
 
-func (l *Logger) Error(msg string, err error, args ...any) {
-	if err != nil {
-		l.log.Error(msg, append([]any{slog.Any("error", err.Error())}, args...)...)
-	} else {
-		l.log.Error(msg, args...)
+func (l *Logger) Error(msg string, attrs ...Attr) {
+	l.logWithLevel(backgroundContext, slog.LevelError, msg, attrs...)
+}
+
+func (l *Logger) Fatal(msg string, attrs ...Attr) {
+	l.logWithLevel(backgroundContext, levelFatal, msg, attrs...)
+	l.exitIfNeeded()
+}
+
+func (l *Logger) TraceContext(ctx context.Context, msg string, attrs ...Attr) {
+	l.logWithLevel(ctx, levelTrace, msg, attrs...)
+}
+
+func (l *Logger) DebugContext(ctx context.Context, msg string, attrs ...Attr) {
+	l.logWithLevel(ctx, slog.LevelDebug, msg, attrs...)
+}
+
+func (l *Logger) InfoContext(ctx context.Context, msg string, attrs ...Attr) {
+	l.logWithLevel(ctx, slog.LevelInfo, msg, attrs...)
+}
+
+func (l *Logger) WarnContext(ctx context.Context, msg string, attrs ...Attr) {
+	l.logWithLevel(ctx, slog.LevelWarn, msg, attrs...)
+}
+
+func (l *Logger) ErrorContext(ctx context.Context, msg string, attrs ...Attr) {
+	l.logWithLevel(ctx, slog.LevelError, msg, attrs...)
+}
+
+func (l *Logger) FatalContext(ctx context.Context, msg string, attrs ...Attr) {
+	l.logWithLevel(ctx, levelFatal, msg, attrs...)
+	l.exitIfNeeded()
+}
+
+func (l *Logger) logWithLevel(ctx context.Context, level slog.Level, msg string, attrs ...Attr) {
+	l.Log(ctx, level, msg, attrs...)
+}
+
+func (l *Logger) exitIfNeeded() {
+	if l != nil && l.exit != nil {
+		l.exit(1)
 	}
 }
 
-func (l *Logger) Fatal(msg string, err error, args ...any) {
-	l.log.Log(context.Background(), LevelFatal, msg, append([]any{slog.Any("error", err.Error())}, args...)...)
-	os.Exit(1)
+func (l *Logger) clone(handler slog.Handler) *Logger {
+	if l == nil {
+		return Default().clone(handler)
+	}
+	return &Logger{
+		Logger:    slog.New(handler),
+		handler:   handler,
+		component: l.component,
+		level:     l.level,
+		exit:      l.exit,
+	}
+}
+
+func (l *Logger) cloneWithComponent(handler slog.Handler, component string) *Logger {
+	if l == nil {
+		return Default().cloneWithComponent(handler, component)
+	}
+	return &Logger{
+		Logger:    slog.New(handler),
+		handler:   handler,
+		component: component,
+		level:     l.level,
+		exit:      l.exit,
+	}
 }

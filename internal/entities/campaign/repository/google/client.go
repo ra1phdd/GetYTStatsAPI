@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"getytstatsapi/internal/core/domain"
+
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
@@ -84,7 +86,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string) (Account, error)
 	return Account{Email: strings.TrimSpace(userInfo.Email), RefreshToken: strings.TrimSpace(token.RefreshToken)}, nil
 }
 
-func (c *Client) CreateSpreadsheet(ctx context.Context, refreshToken string, title string, formula string) (Spreadsheet, error) {
+func (c *Client) CreateSpreadsheet(ctx context.Context, refreshToken string, title string, formula string, columns []domain.StatsColumn) (Spreadsheet, error) {
 	if !c.Enabled() {
 		return Spreadsheet{}, fmt.Errorf("google integration is not configured")
 	}
@@ -123,7 +125,7 @@ func (c *Client) CreateSpreadsheet(ctx context.Context, refreshToken string, tit
 	if err := c.shareSpreadsheetByLink(ctx, driveService, spreadsheet.SpreadsheetId); err != nil {
 		return Spreadsheet{}, err
 	}
-	if err := c.resizeSpreadsheetColumns(ctx, sheetsService, spreadsheet); err != nil {
+	if err := c.resizeSpreadsheetColumns(ctx, sheetsService, spreadsheet, columns); err != nil {
 		return Spreadsheet{}, err
 	}
 	return Spreadsheet{ID: spreadsheet.SpreadsheetId, URL: spreadsheet.SpreadsheetUrl}, nil
@@ -144,7 +146,7 @@ func (c *Client) shareSpreadsheetByLink(ctx context.Context, driveService *drive
 	return nil
 }
 
-func (c *Client) resizeSpreadsheetColumns(ctx context.Context, sheetsService *sheets.Service, spreadsheet *sheets.Spreadsheet) error {
+func (c *Client) resizeSpreadsheetColumns(ctx context.Context, sheetsService *sheets.Service, spreadsheet *sheets.Spreadsheet, columns []domain.StatsColumn) error {
 	if sheetsService == nil || spreadsheet == nil || strings.TrimSpace(spreadsheet.SpreadsheetId) == "" {
 		return nil
 	}
@@ -152,31 +154,38 @@ func (c *Client) resizeSpreadsheetColumns(ctx context.Context, sheetsService *sh
 	if len(spreadsheet.Sheets) > 0 && spreadsheet.Sheets[0] != nil && spreadsheet.Sheets[0].Properties != nil {
 		sheetID = spreadsheet.Sheets[0].Properties.SheetId
 	}
-	requests := []*sheets.Request{
-		{UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
-			Range:      &sheets.DimensionRange{SheetId: sheetID, Dimension: "COLUMNS", StartIndex: 0, EndIndex: 1},
-			Properties: &sheets.DimensionProperties{PixelSize: 160},
+	columns = domain.NormalizeStatsColumns(columns)
+	requests := make([]*sheets.Request, 0, len(columns))
+	for idx, column := range columns {
+		requests = append(requests, &sheets.Request{UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+			Range:      &sheets.DimensionRange{SheetId: sheetID, Dimension: "COLUMNS", StartIndex: int64(idx), EndIndex: int64(idx + 1)},
+			Properties: &sheets.DimensionProperties{PixelSize: spreadsheetColumnWidth(column)},
 			Fields:     "pixelSize",
-		}},
-		{UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
-			Range:      &sheets.DimensionRange{SheetId: sheetID, Dimension: "COLUMNS", StartIndex: 1, EndIndex: 2},
-			Properties: &sheets.DimensionProperties{PixelSize: 140},
-			Fields:     "pixelSize",
-		}},
-		{UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
-			Range:      &sheets.DimensionRange{SheetId: sheetID, Dimension: "COLUMNS", StartIndex: 2, EndIndex: 3},
-			Properties: &sheets.DimensionProperties{PixelSize: 360},
-			Fields:     "pixelSize",
-		}},
-		{UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
-			Range:      &sheets.DimensionRange{SheetId: sheetID, Dimension: "COLUMNS", StartIndex: 3, EndIndex: 4},
-			Properties: &sheets.DimensionProperties{PixelSize: 120},
-			Fields:     "pixelSize",
-		}},
+		}})
+	}
+	if len(requests) == 0 {
+		return nil
 	}
 	_, err := sheetsService.Spreadsheets.BatchUpdate(strings.TrimSpace(spreadsheet.SpreadsheetId), &sheets.BatchUpdateSpreadsheetRequest{Requests: requests}).Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("resize spreadsheet columns: %w", err)
 	}
 	return nil
+}
+
+func spreadsheetColumnWidth(column domain.StatsColumn) int64 {
+	switch column {
+	case domain.StatsColumnID:
+		return 160
+	case domain.StatsColumnPublishDate, domain.StatsColumnViewsUpdatedAt:
+		return 170
+	case domain.StatsColumnVideoURL:
+		return 360
+	case domain.StatsColumnViews:
+		return 140
+	case domain.StatsColumnAdTimings:
+		return 220
+	default:
+		return 160
+	}
 }

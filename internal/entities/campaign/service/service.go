@@ -220,7 +220,7 @@ func (s *Service) CreateCampaignSpreadsheet(ctx context.Context, userID int64, c
 	if strings.TrimSpace(item.SpreadsheetURL) != "" {
 		return item, nil
 	}
-	spreadsheet, err := s.google.CreateSpreadsheet(ctx, settings.GoogleRefreshToken, buildCampaignSpreadsheetTitle(item), buildGoogleSheetFormula(item.ExportURL(s.publicBaseURL)))
+	spreadsheet, err := s.google.CreateSpreadsheet(ctx, settings.GoogleRefreshToken, buildCampaignSpreadsheetTitle(item), buildGoogleSheetFormula(item.ExportURL(s.publicBaseURL)), item.Columns)
 	if err != nil {
 		return domain.Campaign{}, err
 	}

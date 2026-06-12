@@ -1,7 +1,7 @@
 package config
 
 const (
-	ConfigPath   = "{PWD}/config.json"
+	ConfigPath   = "{PWD}/.env"
 	SecurityPath = "{PWD}/.security.yml"
 
 	DownloaderDownloadPath = "{TMP}"

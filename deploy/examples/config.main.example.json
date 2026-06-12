@@ -12,5 +12,13 @@
       "sslmode": "disable",
       "prefer_simple_protocol": "true"
     }
-  }
+  },
+  "notifications": {
+    "webhook_url": "http://127.0.0.1:8081"
+  },
+  "internal": {
+    "service_id": "campaign-api",
+    "peer_service_id": "telegram-bot"
+  },
+  "public_base_url": "http://127.0.0.1:8080"
 }

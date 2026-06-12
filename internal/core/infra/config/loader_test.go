@@ -20,12 +20,23 @@ func TestLoadMergesConfigAndSecurityFiles(t *testing.T) {
 	configData := `{
 		"logger_level": "debug",
 		"http": {"address": ":8080"},
-		"database": {"host": "127.0.0.1", "port": 5432, "user": "app", "name": "stats", "options": {"sslmode": "disable"}}
+		"database": {"host": "127.0.0.1", "port": 5432, "user": "app", "name": "stats", "options": {"sslmode": "disable"}},
+		"notifications": {"webhook_url": "http://127.0.0.1:8081"},
+		"internal": {"service_id": "campaign-api", "peer_service_id": "telegram-bot"},
+		"public_base_url": "http://127.0.0.1:8080"
 	}`
 	securityData := strings.TrimSpace(`
 database:
   password: db-secret
 youtube_api_key: yt-secret
+telegram_auth:
+  bot_token: tg-secret
+internal:
+  service_secret: api-secret
+  peer_service_secret: bot-secret
+export_jwt_secret: export-secret
+access_jwt_secret: access-secret
+refresh_jwt_secret: refresh-secret
 `) + "\n"
 
 	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
@@ -86,6 +97,16 @@ func TestLoaderSaveKeepsSecretsOutOfConfigJSON(t *testing.T) {
 	cfg.Database.Password = *NewSecureString("db-secret")
 	cfg.Database.Name = "stats"
 	cfg.YouTubeAPIKey = *NewSecureString("yt-secret")
+	cfg.TelegramAuth.BotToken = *NewSecureString("tg-secret")
+	cfg.Notifications.WebhookURL = "http://127.0.0.1:8081"
+	cfg.Internal.ServiceID = "campaign-api"
+	cfg.Internal.ServiceSecret = *NewSecureString("api-secret")
+	cfg.Internal.PeerServiceID = "telegram-bot"
+	cfg.Internal.PeerServiceSecret = *NewSecureString("bot-secret")
+	cfg.PublicBaseURL = "http://127.0.0.1:8080"
+	cfg.ExportJWTSecret = *NewSecureString("export-secret")
+	cfg.AccessJWTSecret = *NewSecureString("access-secret")
+	cfg.RefreshJWTSecret = *NewSecureString("refresh-secret")
 
 	if err := loader.Save(cfg); err != nil {
 		t.Fatal(err)
@@ -171,10 +192,13 @@ func TestLoadTelegramConfig(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	securityPath := filepath.Join(dir, ".security.yml")
 
-	configData := `{"logger_level": "debug"}`
-	securityData := strings.TrimSpace(`
-	token: tg-secret
-	`) + "\n"
+	configData := `{
+		"logger_level": "debug",
+		"webhook": {"address": ":8081"},
+		"api": {"base_url": "http://127.0.0.1:8080"},
+		"internal": {"service_id": "telegram-bot", "peer_service_id": "campaign-api"}
+	}`
+	securityData := "token: tg-secret\ninternal:\n  service_secret: bot-secret\n  peer_service_secret: api-secret\n"
 
 	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
 		t.Fatal(err)

@@ -4,7 +4,7 @@ import "net/http"
 
 type ResponseWriter struct {
 	http.ResponseWriter
-	statusCode int
+	statusCode  int
 	wroteHeader bool
 }
 

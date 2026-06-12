@@ -19,25 +19,21 @@ COPY . .
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build \
-    -trimpath \
-    -ldflags="-s -w" \
-    -tags netgo,osusergo \
-    ./cmd/main
-
+    go build -trimpath -ldflags="-s -w" -tags netgo,osusergo -o /out/campaign-api ./cmd/main && \
+    go build -trimpath -ldflags="-s -w" -tags netgo,osusergo -o /out/migrator ./cmd/migrator
 
 FROM scratch AS release
 
 WORKDIR /app
 
-COPY --from=build /build/main /main
-
+COPY --from=build /out/campaign-api /app/campaign-api
+COPY --from=build /out/migrator /app/migrator
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-
 COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
+
 ENV TZDIR=/usr/share/zoneinfo
 ENV TZ=Europe/Moscow
 
 USER 65532:65532
 
-ENTRYPOINT ["/main"]
+ENTRYPOINT ["/app/campaign-api"]

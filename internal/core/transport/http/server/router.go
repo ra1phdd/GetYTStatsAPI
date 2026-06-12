@@ -18,7 +18,7 @@ type APIVersionRouter struct {
 	apiVersion ApiVersion
 }
 
-func NewAPIVersionRouter(	apiVersion ApiVersion,) *APIVersionRouter {
+func NewAPIVersionRouter(apiVersion ApiVersion) *APIVersionRouter {
 	return &APIVersionRouter{
 		ServeMux:   http.NewServeMux(),
 		apiVersion: apiVersion,
@@ -27,7 +27,7 @@ func NewAPIVersionRouter(	apiVersion ApiVersion,) *APIVersionRouter {
 
 func (r *APIVersionRouter) RegisterRoutes(routes ...Route) {
 	for _, route := range routes {
-		pattern := fmt.Sprintf("%s %s", route.Method, route.Path)
+		pattern := fmt.Sprintf("%s /%s%s", route.Method, r.apiVersion, route.Path)
 		r.Handle(pattern, route.Handler)
 	}
 }

@@ -1,0 +1,4 @@
+token: your-telegram-bot-token
+internal:
+  service_secret: your-telegram-bot-service-secret
+  peer_service_secret: your-campaign-api-service-secret

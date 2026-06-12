@@ -88,3 +88,10 @@ func (s *Server) Run(ctx context.Context) error {
 		return nil
 	}
 }
+
+func (s *Server) Bot() *tele.Bot {
+	if s == nil {
+		return nil
+	}
+	return s.bot
+}

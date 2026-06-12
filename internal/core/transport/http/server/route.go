@@ -8,7 +8,7 @@ type Route struct {
 	Handler http.HandlerFunc
 }
 
-func NewRoute(	method string,	path string,	handler http.HandlerFunc,) Route {
+func NewRoute(method string, path string, handler http.HandlerFunc) Route {
 	return Route{
 		Method:  method,
 		Path:    path,

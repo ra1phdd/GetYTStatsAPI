@@ -18,7 +18,7 @@ import (
 type Service struct {
 	repository             stats_repository.Repository
 	sponsorBlockRepository sponsorblock_repository.Repository
-	now                   func() time.Time
+	now                    func() time.Time
 }
 
 func New(repository stats_repository.Repository, sponsorBlockRepository sponsorblock_repository.Repository) *Service {

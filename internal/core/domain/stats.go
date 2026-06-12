@@ -93,11 +93,11 @@ func normalizeStatsColumns(columns []StatsColumn) []StatsColumn {
 }
 
 type StatsVideo struct {
-	VideoID string
-	Name        string
-	PublishDate time.Time
-	Views       uint64
-	URL         string
+	VideoID        string
+	Name           string
+	PublishDate    time.Time
+	Views          uint64
+	URL            string
 	ViewsUpdatedAt time.Time
 	SkipSegments   []SponsorBlockSegment
 }

@@ -19,10 +19,21 @@ type Telegram struct {
 	routers               map[int64]string
 	handlers              map[string]tele.HandlerFunc
 	timers                map[int64]*time.Timer
+	store                 StateStore
 	unknownCommandMessage string
 }
 
+type StateStore interface {
+	Get(userID int64) (string, error)
+	Set(userID int64, state string) error
+	Clear(userID int64) error
+}
+
 func NewInput(log *logger.Logger) *Telegram {
+	return NewInputWithStore(log, nil)
+}
+
+func NewInputWithStore(log *logger.Logger, store StateStore) *Telegram {
 	if log == nil {
 		log = logger.New(logger.WithComponent("telegram.input"))
 	}
@@ -32,6 +43,7 @@ func NewInput(log *logger.Logger) *Telegram {
 		routers:               make(map[int64]string),
 		handlers:              make(map[string]tele.HandlerFunc),
 		timers:                make(map[int64]*time.Timer),
+		store:                 store,
 		unknownCommandMessage: "🤔 Неизвестная команда. Используйте /start для работы с ботом",
 	}
 }
@@ -64,6 +76,13 @@ func (t *Telegram) SetWithTTL(userID int64, state string, ttl time.Duration, onE
 	defer t.mu.Unlock()
 
 	t.routers[userID] = state
+	if t.store != nil {
+		if state == "" {
+			_ = t.store.Clear(userID)
+		} else {
+			_ = t.store.Set(userID, state)
+		}
+	}
 	if timer, exists := t.timers[userID]; exists {
 		timer.Stop()
 		delete(t.timers, userID)
@@ -107,6 +126,12 @@ func (t *Telegram) Has(userID int64) bool {
 	if t == nil || userID == 0 {
 		return false
 	}
+	if t.store != nil {
+		state, err := t.store.Get(userID)
+		if err == nil {
+			return state != ""
+		}
+	}
 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -129,12 +154,9 @@ func (t *Telegram) Handle(c tele.Context) error {
 	log := core_telegram_tgctx.Logger(c, t.log)
 	userID := core_telegram_tgctx.SenderID(c)
 
-	t.mu.RLock()
-	state, ok := t.routers[userID]
-	t.mu.RUnlock()
+	state, ok := t.lookupState(userID)
 
 	if ok && state != "" {
-		t.Clear(userID)
 		if handler, exists := t.handlers[state]; exists {
 			return handler(c)
 		}
@@ -143,6 +165,20 @@ func (t *Telegram) Handle(c tele.Context) error {
 	}
 
 	return t.handleUnknownCommand(c, log)
+}
+
+func (t *Telegram) lookupState(userID int64) (string, bool) {
+	if t.store != nil {
+		state, err := t.store.Get(userID)
+		if err == nil {
+			return state, state != ""
+		}
+	}
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	state, ok := t.routers[userID]
+	return state, ok
 }
 
 func SetReplyMarkup(c tele.Context, markup *tele.ReplyMarkup) {
@@ -212,6 +248,9 @@ func (t *Telegram) handleUnknownCommand(c tele.Context, log *logger.Logger) erro
 
 func (t *Telegram) clearUnsafe(userID int64) {
 	delete(t.routers, userID)
+	if t.store != nil {
+		_ = t.store.Clear(userID)
+	}
 	if timer, exists := t.timers[userID]; exists {
 		timer.Stop()
 		delete(t.timers, userID)

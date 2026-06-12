@@ -1,11 +1,14 @@
 database:
   password: your-database-password
 youtube_api_key: your-youtube-api-key
-telegram_auth:
+telegram:
   bot_token: your-telegram-bot-token
 internal:
-  service_secret: your-campaign-api-service-secret
-  peer_service_secret: your-telegram-bot-service-secret
+  api:
+    service_secret: your-campaign-api-service-secret
+    peer_service_secret: your-telegram-bot-service-secret
 export_jwt_secret: your-export-jwt-secret
 access_jwt_secret: your-access-jwt-secret
 refresh_jwt_secret: your-refresh-jwt-secret
+google_oauth:
+  client_secret: your-google-client-secret

@@ -5,9 +5,67 @@
 package sqlc
 
 import (
+	"database/sql"
 	"encoding/json"
 	"time"
 )
+
+type AdCampaign struct {
+	ID                 int64
+	TelegramUserID     int64
+	ChannelID          string
+	ChannelTitle       string
+	Keyword            string
+	StartDate          time.Time
+	Timezone           string
+	TargetViews        sql.NullInt64
+	Status             string
+	ExportJwt          string
+	ClosedAt           sql.NullTime
+	CloseReason        sql.NullString
+	LastSnapshotAt     sql.NullTime
+	LastTotalViews     int64
+	LastDailyGrowth    sql.NullInt64
+	EstimatedCloseDate sql.NullTime
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	SpreadsheetID      sql.NullString
+	SpreadsheetUrl     sql.NullString
+	Columns            json.RawMessage
+}
+
+type AdCampaignSnapshot struct {
+	ID                 int64
+	CampaignID         int64
+	SnapshotAt         time.Time
+	TotalViews         int64
+	RemainingViews     sql.NullInt64
+	DailyGrowth        sql.NullInt64
+	EstimatedCloseDate sql.NullTime
+	CreatedAt          time.Time
+}
+
+type AdCampaignSnapshotVideo struct {
+	ID             int64
+	SnapshotID     int64
+	Position       int32
+	VideoID        string
+	Name           string
+	PublishDate    time.Time
+	Views          int64
+	Url            string
+	ViewsUpdatedAt time.Time
+}
+
+type PublicUserSession struct {
+	ID               string
+	TelegramUserID   int64
+	RefreshTokenHash string
+	ExpiresAt        time.Time
+	RevokedAt        sql.NullTime
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
 
 type StatsRequest struct {
 	ID           int64
@@ -27,4 +85,37 @@ type StatsVideo struct {
 	PublishDate time.Time
 	Views       int64
 	Url         string
+}
+
+type TelegramInputSession struct {
+	TelegramUserID int64
+	Flow           string
+	Step           string
+	Payload        json.RawMessage
+	ExpiresAt      sql.NullTime
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type TelegramUserChannel struct {
+	ID             int64
+	TelegramUserID int64
+	ChannelID      string
+	ChannelTitle   string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type TelegramUserSetting struct {
+	TelegramUserID              int64
+	NotificationsEnabled        bool
+	NotificationTime            string
+	Timezone                    string
+	LastNotificationSentAt      sql.NullTime
+	CreatedAt                   time.Time
+	UpdatedAt                   time.Time
+	GoogleEmail                 sql.NullString
+	GoogleRefreshToken          sql.NullString
+	GoogleConnectedAt           sql.NullTime
+	NotificationIntervalMinutes int32
 }

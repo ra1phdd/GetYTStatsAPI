@@ -1,13 +1,19 @@
 {
 	"logger_level": "warn",
-	"webhook": {
+	"http": {
 		"address": ":8081"
 	},
+	"telegram": {},
 	"api": {
 		"base_url": "http://127.0.0.1:8080"
 	},
+	"notifications": {
+		"webhook_url": "http://127.0.0.1:8081"
+	},
 	"internal": {
-		"service_id": "telegram-bot",
-		"peer_service_id": "campaign-api"
+		"bot": {
+			"service_id": "telegram-bot",
+			"peer_service_id": "campaign-api"
+		}
 	}
 }

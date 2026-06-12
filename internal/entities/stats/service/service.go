@@ -46,24 +46,29 @@ func (s *Service) GetVideos(ctx context.Context, query domain.StatsQuery) ([]dom
 		}
 	}
 
-	if !containsColumn(query.Columns, domain.StatsColumnAdTimings) || s.sponsorBlockRepository == nil {
+	return s.PopulateSponsorSegments(ctx, videos, query.Columns)
+}
+
+func (s *Service) PopulateSponsorSegments(ctx context.Context, videos []domain.StatsVideo, columns []domain.StatsColumn) ([]domain.StatsVideo, error) {
+	if s == nil || !containsColumn(columns, domain.StatsColumnAdTimings) || s.sponsorBlockRepository == nil {
 		return videos, nil
 	}
 
-	for idx := range videos {
-		if strings.TrimSpace(videos[idx].VideoID) == "" {
+	populated := append([]domain.StatsVideo(nil), videos...)
+	for idx := range populated {
+		if strings.TrimSpace(populated[idx].VideoID) == "" || len(populated[idx].SkipSegments) > 0 {
 			continue
 		}
 
-		segments, err := s.sponsorBlockRepository.GetSkipSegments(ctx, videos[idx].VideoID)
+		segments, err := s.sponsorBlockRepository.GetSkipSegments(ctx, populated[idx].VideoID)
 		if err != nil {
-			return nil, fmt.Errorf("get sponsorblock segments for video %s: %w", videos[idx].VideoID, err)
+			return nil, fmt.Errorf("get sponsorblock segments for video %s: %w", populated[idx].VideoID, err)
 		}
 
-		videos[idx].SkipSegments = segments
+		populated[idx].SkipSegments = segments
 	}
 
-	return videos, nil
+	return populated, nil
 }
 
 func (s *Service) BuildCSV(videos []domain.StatsVideo, columns []domain.StatsColumn) ([]byte, error) {
@@ -71,6 +76,7 @@ func (s *Service) BuildCSV(videos []domain.StatsVideo, columns []domain.StatsCol
 	writer := csv.NewWriter(&buf)
 
 	columns = normalizeColumns(columns)
+	viewsUpdatedAtValue := sharedViewsUpdatedAtValue(videos)
 	header := make([]string, 0, len(columns))
 	for _, column := range columns {
 		header = append(header, columnHeader(column))
@@ -83,7 +89,7 @@ func (s *Service) BuildCSV(videos []domain.StatsVideo, columns []domain.StatsCol
 	for idx, video := range videos {
 		record := make([]string, 0, len(columns))
 		for _, column := range columns {
-			record = append(record, columnValue(column, idx, video))
+			record = append(record, columnValue(column, idx, video, viewsUpdatedAtValue))
 		}
 		totalViews += video.Views
 
@@ -96,11 +102,6 @@ func (s *Service) BuildCSV(videos []domain.StatsVideo, columns []domain.StatsCol
 	if viewsColumnIndex >= 0 {
 		footer := make([]string, len(columns))
 		footer[viewsColumnIndex] = fmt.Sprint(totalViews)
-		if viewsColumnIndex > 0 {
-			footer[viewsColumnIndex-1] = "Общее количество просмотров:"
-		} else {
-			footer[0] = "Общее количество просмотров: " + fmt.Sprint(totalViews)
-		}
 
 		if err := writer.Write(footer); err != nil {
 			return nil, fmt.Errorf("write csv footer: %w", err)
@@ -156,7 +157,7 @@ func columnHeader(column domain.StatsColumn) string {
 	}
 }
 
-func columnValue(column domain.StatsColumn, idx int, video domain.StatsVideo) string {
+func columnValue(column domain.StatsColumn, idx int, video domain.StatsVideo, viewsUpdatedAtValue string) string {
 	switch column {
 	case domain.StatsColumnID:
 		return fmt.Sprint(idx + 1)
@@ -169,13 +170,22 @@ func columnValue(column domain.StatsColumn, idx int, video domain.StatsVideo) st
 	case domain.StatsColumnAdTimings:
 		return formatSponsorTimings(video.SkipSegments)
 	case domain.StatsColumnViewsUpdatedAt:
-		if video.ViewsUpdatedAt.IsZero() {
-			return "-"
+		if idx > 0 {
+			return ""
 		}
-		return "'" + video.ViewsUpdatedAt.Format("2006-01-02 15:04")
+		return viewsUpdatedAtValue
 	default:
 		return ""
 	}
+}
+
+func sharedViewsUpdatedAtValue(videos []domain.StatsVideo) string {
+	for _, video := range videos {
+		if !video.ViewsUpdatedAt.IsZero() {
+			return "'" + video.ViewsUpdatedAt.Format("2006-01-02 15:04")
+		}
+	}
+	return "-"
 }
 
 func formatSponsorTimings(segments []domain.SponsorBlockSegment) string {
@@ -185,7 +195,7 @@ func formatSponsorTimings(segments []domain.SponsorBlockSegment) string {
 
 	sponsorSegments := make([]domain.SponsorBlockSegment, 0, len(segments))
 	for _, segment := range segments {
-		if segment.Category == "sponsor" {
+		if strings.EqualFold(strings.TrimSpace(segment.Category), "sponsor") {
 			sponsorSegments = append(sponsorSegments, segment)
 		}
 	}
@@ -202,28 +212,19 @@ func formatSponsorTimings(segments []domain.SponsorBlockSegment) string {
 		parts = append(parts, formatSeconds(segment.StartTime)+"-"+formatSeconds(segment.EndTime))
 	}
 
-	return strings.Join(parts, "; ")
+	return strings.Join(parts, ", ")
 }
 
 func formatSeconds(value float64) string {
-	duration := time.Duration(value * float64(time.Second))
-	hours := int(duration / time.Hour)
-	duration -= time.Duration(hours) * time.Hour
-	minutes := int(duration / time.Minute)
-	duration -= time.Duration(minutes) * time.Minute
-	seconds := int(duration / time.Second)
-	duration -= time.Duration(seconds) * time.Second
-	milliseconds := int(duration / time.Millisecond)
-
-	if milliseconds == 0 {
-		if hours > 0 {
-			return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
-		}
-		return fmt.Sprintf("%02d:%02d", minutes, seconds)
+	totalSeconds := int(value)
+	if totalSeconds < 0 {
+		totalSeconds = 0
 	}
-
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
 	if hours > 0 {
-		return fmt.Sprintf("%d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds)
+		return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 	}
-	return fmt.Sprintf("%02d:%02d.%03d", minutes, seconds, milliseconds)
+	return fmt.Sprintf("%02d:%02d", minutes, seconds)
 }

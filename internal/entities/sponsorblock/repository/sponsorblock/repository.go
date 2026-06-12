@@ -18,14 +18,6 @@ const defaultBaseURL = "https://sponsor.ajay.app"
 
 var skipCategories = []string{
 	"sponsor",
-	"intro",
-	"outro",
-	"selfpromo",
-	"interaction",
-	"preview",
-	"music_offtopic",
-	"filler",
-	"exclusive_access",
 }
 
 type Repository struct {

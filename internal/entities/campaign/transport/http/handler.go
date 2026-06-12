@@ -179,14 +179,14 @@ func (h *Handler) CompleteGoogleLink(w http.ResponseWriter, r *http.Request) {
 	settings, err := h.campaigns.CompleteGoogleLink(r.Context(), r.URL.Query().Get("code"), r.URL.Query().Get("state"))
 	if err != nil {
 		logger.FromContext(r.Context()).Warn("google link callback failed", logger.Err(err))
-		writeHTML(w, http.StatusBadRequest, renderGoogleLinkHTML("Не удалось подключить Google аккаунт.", "Вернитесь в Telegram и попробуйте еще раз."))
+		writeText(w, http.StatusOK, "Не удалось подключить Google аккаунт. Вернитесь в Telegram и попробуйте еще раз.")
 		return
 	}
 	message := "Google аккаунт подключен."
 	if strings.TrimSpace(settings.GoogleEmail) != "" {
 		message = "Google аккаунт подключен: " + settings.GoogleEmail
 	}
-	writeHTML(w, http.StatusOK, renderGoogleLinkHTML(message, "Вернитесь в Telegram и откройте раздел Google в настройках."))
+	writeText(w, http.StatusOK, message+" Вернитесь в Telegram и откройте раздел Google в настройках.")
 }
 
 func (h *Handler) CreateCampaignSpreadsheet(w http.ResponseWriter, r *http.Request) {
@@ -239,6 +239,18 @@ func (h *Handler) CloseUserCampaign(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RefreshUserCampaign(w http.ResponseWriter, r *http.Request) {
 	h.withActorAuth(parseUserIDPath, func(w http.ResponseWriter, r *http.Request, userID int64) {
 		h.refreshCampaign(w, r, userID)
+	})(w, r)
+}
+
+func (h *Handler) UpdateUserCampaignColumns(w http.ResponseWriter, r *http.Request) {
+	h.withActorAuth(parseUserIDPath, func(w http.ResponseWriter, r *http.Request, userID int64) {
+		h.updateCampaignColumns(w, r, userID)
+	})(w, r)
+}
+
+func (h *Handler) UpdateUserCampaignTarget(w http.ResponseWriter, r *http.Request) {
+	h.withActorAuth(parseUserIDPath, func(w http.ResponseWriter, r *http.Request, userID int64) {
+		h.updateCampaignTarget(w, r, userID)
 	})(w, r)
 }
 
@@ -506,6 +518,59 @@ func (h *Handler) refreshCampaign(w http.ResponseWriter, r *http.Request, userID
 	})
 }
 
+func (h *Handler) updateCampaignColumns(w http.ResponseWriter, r *http.Request, userID int64) {
+	response := core_http_response.NewHTTPResponseHandler(logger.FromContext(r.Context()), w)
+	campaignID, err := parseInt64Path(r, "campaign_id")
+	if err != nil {
+		response.ErrorResponse("invalid campaign id", err)
+		return
+	}
+	var request struct {
+		Columns []string `json:"columns"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		response.ErrorResponse("invalid update campaign columns request", err)
+		return
+	}
+	columns := make([]domain.StatsColumn, 0, len(request.Columns))
+	for _, item := range request.Columns {
+		column := domain.StatsColumn(strings.TrimSpace(item))
+		if !domain.IsValidStatsColumn(column) {
+			response.ErrorResponse("invalid update campaign columns request", fmt.Errorf("%w: invalid column %s", core_errors.ErrInvalidArgument, item))
+			return
+		}
+		columns = append(columns, column)
+	}
+	item, err := h.campaigns.UpdateCampaignColumns(r.Context(), userID, campaignID, columns)
+	if err != nil {
+		response.ErrorResponse("failed to update campaign columns", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.campaignToResponse(item))
+}
+
+func (h *Handler) updateCampaignTarget(w http.ResponseWriter, r *http.Request, userID int64) {
+	response := core_http_response.NewHTTPResponseHandler(logger.FromContext(r.Context()), w)
+	campaignID, err := parseInt64Path(r, "campaign_id")
+	if err != nil {
+		response.ErrorResponse("invalid campaign id", err)
+		return
+	}
+	var request struct {
+		TargetViews *int64 `json:"target_views"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		response.ErrorResponse("invalid update campaign target request", err)
+		return
+	}
+	item, err := h.campaigns.UpdateCampaignTarget(r.Context(), userID, campaignID, request.TargetViews)
+	if err != nil {
+		response.ErrorResponse("failed to update campaign target", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.campaignToResponse(item))
+}
+
 func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request, userID int64) {
 	response := core_http_response.NewHTTPResponseHandler(logger.FromContext(r.Context()), w)
 	settings, err := h.campaigns.GetUserSettings(r.Context(), userID)
@@ -519,19 +584,21 @@ func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request, userID int
 func (h *Handler) patchSettings(w http.ResponseWriter, r *http.Request, userID int64) {
 	response := core_http_response.NewHTTPResponseHandler(logger.FromContext(r.Context()), w)
 	var request struct {
-		NotificationsEnabled bool   `json:"notifications_enabled"`
-		NotificationTime     string `json:"notification_time"`
-		Timezone             string `json:"timezone"`
+		NotificationsEnabled        bool   `json:"notifications_enabled"`
+		NotificationTime            string `json:"notification_time"`
+		NotificationIntervalMinutes int    `json:"notification_interval_minutes"`
+		Timezone                    string `json:"timezone"`
 	}
 	if err := decodeJSON(r, &request); err != nil {
 		response.ErrorResponse("invalid settings request", err)
 		return
 	}
 	settings, err := h.campaigns.UpdateUserSettings(r.Context(), domain.UserSettings{
-		TelegramUserID:       userID,
-		NotificationsEnabled: request.NotificationsEnabled,
-		NotificationTime:     request.NotificationTime,
-		Timezone:             request.Timezone,
+		TelegramUserID:              userID,
+		NotificationsEnabled:        request.NotificationsEnabled,
+		NotificationTime:            request.NotificationTime,
+		NotificationIntervalMinutes: request.NotificationIntervalMinutes,
+		Timezone:                    request.Timezone,
 	})
 	if err != nil {
 		response.ErrorResponse("failed to update settings", err)
@@ -659,19 +726,10 @@ func (h *Handler) campaignToResponse(item domain.Campaign) map[string]any {
 	return response
 }
 
-func writeHTML(w http.ResponseWriter, statusCode int, body string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+func writeText(w http.ResponseWriter, statusCode int, body string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(statusCode)
 	_, _ = w.Write([]byte(body))
-}
-
-func renderGoogleLinkHTML(title string, subtitle string) string {
-	return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Google Link</title><style>body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}.card{max-width:560px;background:#111827;border:1px solid #334155;border-radius:18px;padding:28px 24px;box-shadow:0 20px 60px rgba(0,0,0,.35)}h1{font-size:24px;margin:0 0 12px}p{font-size:16px;line-height:1.5;margin:0 0 8px;color:#cbd5e1}</style></head><body><div class=\"card\"><h1>" + htmlEscape(title) + "</h1><p>" + htmlEscape(subtitle) + "</p></div></body></html>"
-}
-
-func htmlEscape(value string) string {
-	replacer := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
-	return replacer.Replace(value)
 }
 
 func sanitizeFilename(value string) string {

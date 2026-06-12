@@ -1,6 +1,8 @@
 bin/
 build/
-logs/
+deploy/
+
+*.log
 
 .gocache/
 .tmp/
@@ -19,3 +21,17 @@ config.yml
 
 .vscode/
 .idea/
+
+.git/
+.gitignore
+.gitattributes
+
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+*.md
+Makefile
+LICENSE
+sqlc.yaml

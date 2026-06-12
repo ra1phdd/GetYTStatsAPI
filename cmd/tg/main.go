@@ -34,12 +34,12 @@ func main() {
 		logger.WithLevelString(cfg.LoggerLevel),
 	)
 
-	apiClient := campaignapi_client.New(cfg.API.BaseURL, cfg.Internal.ServiceID, cfg.Internal.ServiceSecret.String())
+	apiClient := campaignapi_client.New(cfg.API.BaseURL, cfg.Internal.Bot.ServiceID, cfg.Internal.Bot.ServiceSecret.String())
 	stateStore := campaignapi_client.NewInputStateStore(context.Background(), apiClient)
 	inputRouter := core_telegram_input.NewInputWithStore(log.Named("input"), stateStore)
 	handler := campaign_telegram.NewHandler(log.Named("handler"), apiClient, inputRouter)
 	server, err := core_telegram_server.NewServer(
-		cfg.Token.String(),
+		cfg.Telegram.BotToken.String(),
 		log.Named("server"),
 		core_telegram_middleware.RequestID(),
 		core_telegram_middleware.Logger(log.Named("middleware")),
@@ -59,15 +59,15 @@ func main() {
 	webhookHandler := campaign_telegram.NewWebhookHandler(
 		log.Named("webhook"),
 		server.Bot(),
-		cfg.Internal.PeerServiceID,
-		cfg.Internal.PeerServiceSecret.String(),
+		cfg.Internal.Bot.PeerServiceID,
+		cfg.Internal.Bot.PeerServiceSecret.String(),
 	)
 	webhookRouter := core_http_server.NewAPIVersionRouter(core_http_server.ApiVersion1)
 	webhookRouter.RegisterRoutes(
 		core_http_server.NewRoute(http.MethodPost, "/internal/webhooks/campaign-events", webhookHandler.ServeHTTP),
 	)
 	webhookServer := core_http_server.NewHTTPServer(
-		cfg.Webhook.Address,
+		cfg.HTTP.Address,
 		log.Named("webhook.http"),
 		core_http_middleware.RequestID(),
 		core_http_middleware.Logger(log.Named("webhook.middleware")),

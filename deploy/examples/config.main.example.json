@@ -13,12 +13,19 @@
       "prefer_simple_protocol": "true"
     }
   },
+  "google_oauth": {
+    "client_id": "your-google-client-id",
+    "redirect_url": "http://127.0.0.1:8080/v1/callback"
+  },
+  "telegram": {},
   "notifications": {
     "webhook_url": "http://127.0.0.1:8081"
   },
   "internal": {
-    "service_id": "campaign-api",
-    "peer_service_id": "telegram-bot"
+    "api": {
+      "service_id": "campaign-api",
+      "peer_service_id": "telegram-bot"
+    }
   },
   "public_base_url": "http://127.0.0.1:8080"
 }

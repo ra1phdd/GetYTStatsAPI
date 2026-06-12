@@ -184,6 +184,22 @@ func (c *Client) RefreshCampaign(ctx context.Context, userID int64, campaignID i
 	return response, err
 }
 
+func (c *Client) UpdateCampaignColumns(ctx context.Context, userID int64, campaignID int64, columns []domain.StatsColumn) (Campaign, error) {
+	var response Campaign
+	err := c.doJSON(ctx, http.MethodPatch, fmt.Sprintf("/v1/users/%d/campaigns/%d/columns", userID, campaignID), map[string]any{
+		"columns": columns,
+	}, &response)
+	return response, err
+}
+
+func (c *Client) UpdateCampaignTarget(ctx context.Context, userID int64, campaignID int64, targetViews *int64) (Campaign, error) {
+	var response Campaign
+	err := c.doJSON(ctx, http.MethodPatch, fmt.Sprintf("/v1/users/%d/campaigns/%d/target", userID, campaignID), map[string]any{
+		"target_views": targetViews,
+	}, &response)
+	return response, err
+}
+
 func (c *Client) CreateCampaignSpreadsheet(ctx context.Context, userID int64, campaignID int64) (Campaign, error) {
 	var response Campaign
 	err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/users/%d/campaigns/%d/spreadsheet", userID, campaignID), nil, &response)
@@ -199,9 +215,10 @@ func (c *Client) GetSettings(ctx context.Context, userID int64) (domain.UserSett
 func (c *Client) UpdateSettings(ctx context.Context, settings domain.UserSettings) (domain.UserSettings, error) {
 	var response domain.UserSettings
 	err := c.doJSON(ctx, http.MethodPatch, fmt.Sprintf("/v1/users/%d/settings", settings.TelegramUserID), map[string]any{
-		"notifications_enabled": settings.NotificationsEnabled,
-		"notification_time":     settings.NotificationTime,
-		"timezone":              settings.Timezone,
+		"notifications_enabled":         settings.NotificationsEnabled,
+		"notification_time":             settings.NotificationTime,
+		"notification_interval_minutes": settings.NotificationIntervalMinutes,
+		"timezone":                      settings.Timezone,
 	}, &response)
 	return response, err
 }

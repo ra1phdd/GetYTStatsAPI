@@ -29,6 +29,8 @@ type Client struct {
 	config *oauth2.Config
 }
 
+const spreadsheetCenteredColumnsCount int64 = 6
+
 func New(clientID string, clientSecret string, redirectURL string) *Client {
 	clientID = strings.TrimSpace(clientID)
 	clientSecret = strings.TrimSpace(clientSecret)
@@ -46,7 +48,6 @@ func New(clientID string, clientSecret string, redirectURL string) *Client {
 		Endpoint:     google.Endpoint,
 		Scopes: []string{
 			googleoauth2.UserinfoEmailScope,
-			sheets.SpreadsheetsScope,
 			drive.DriveFileScope,
 		},
 	}}
@@ -154,15 +155,7 @@ func (c *Client) resizeSpreadsheetColumns(ctx context.Context, sheetsService *sh
 	if len(spreadsheet.Sheets) > 0 && spreadsheet.Sheets[0] != nil && spreadsheet.Sheets[0].Properties != nil {
 		sheetID = spreadsheet.Sheets[0].Properties.SheetId
 	}
-	columns = domain.NormalizeStatsColumns(columns)
-	requests := make([]*sheets.Request, 0, len(columns))
-	for idx, column := range columns {
-		requests = append(requests, &sheets.Request{UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
-			Range:      &sheets.DimensionRange{SheetId: sheetID, Dimension: "COLUMNS", StartIndex: int64(idx), EndIndex: int64(idx + 1)},
-			Properties: &sheets.DimensionProperties{PixelSize: spreadsheetColumnWidth(column)},
-			Fields:     "pixelSize",
-		}})
-	}
+	requests := buildSpreadsheetFormatRequests(sheetID, columns)
 	if len(requests) == 0 {
 		return nil
 	}
@@ -173,12 +166,61 @@ func (c *Client) resizeSpreadsheetColumns(ctx context.Context, sheetsService *sh
 	return nil
 }
 
+func buildSpreadsheetFormatRequests(sheetID int64, columns []domain.StatsColumn) []*sheets.Request {
+	columns = domain.NormalizeStatsColumns(columns)
+	requests := make([]*sheets.Request, 0, len(columns)+4)
+	videoURLColumnIndex := int64(-1)
+	for idx, column := range columns {
+		requests = append(requests, &sheets.Request{UpdateDimensionProperties: &sheets.UpdateDimensionPropertiesRequest{
+			Range:      &sheets.DimensionRange{SheetId: sheetID, Dimension: "COLUMNS", StartIndex: int64(idx), EndIndex: int64(idx + 1)},
+			Properties: &sheets.DimensionProperties{PixelSize: spreadsheetColumnWidth(column)},
+			Fields:     "pixelSize",
+		}})
+		if column == domain.StatsColumnVideoURL {
+			videoURLColumnIndex = int64(idx)
+		}
+	}
+	requests = append(requests, &sheets.Request{RepeatCell: &sheets.RepeatCellRequest{
+		Range: &sheets.GridRange{SheetId: sheetID, StartColumnIndex: 0, EndColumnIndex: spreadsheetCenteredColumnsCount},
+		Cell: &sheets.CellData{UserEnteredFormat: &sheets.CellFormat{
+			HorizontalAlignment: "CENTER",
+		}},
+		Fields: "userEnteredFormat.horizontalAlignment",
+	}})
+	if videoURLColumnIndex >= 0 {
+		requests = append(requests, &sheets.Request{RepeatCell: &sheets.RepeatCellRequest{
+			Range: &sheets.GridRange{SheetId: sheetID, StartColumnIndex: videoURLColumnIndex, EndColumnIndex: videoURLColumnIndex + 1, StartRowIndex: 1},
+			Cell: &sheets.CellData{UserEnteredFormat: &sheets.CellFormat{
+				HorizontalAlignment: "LEFT",
+			}},
+			Fields: "userEnteredFormat.horizontalAlignment",
+		}})
+	}
+	requests = append(requests, &sheets.Request{RepeatCell: &sheets.RepeatCellRequest{
+		Range: &sheets.GridRange{SheetId: sheetID, StartRowIndex: 0, EndRowIndex: 1},
+		Cell: &sheets.CellData{UserEnteredFormat: &sheets.CellFormat{
+			HorizontalAlignment: "CENTER",
+		}},
+		Fields: "userEnteredFormat.horizontalAlignment",
+	}})
+	requests = append(requests, &sheets.Request{RepeatCell: &sheets.RepeatCellRequest{
+		Range: &sheets.GridRange{SheetId: sheetID, StartRowIndex: 0, EndRowIndex: 1},
+		Cell: &sheets.CellData{UserEnteredFormat: &sheets.CellFormat{
+			TextFormat: &sheets.TextFormat{Bold: true},
+		}},
+		Fields: "userEnteredFormat.textFormat.bold",
+	}})
+	return requests
+}
+
 func spreadsheetColumnWidth(column domain.StatsColumn) int64 {
 	switch column {
 	case domain.StatsColumnID:
 		return 160
-	case domain.StatsColumnPublishDate, domain.StatsColumnViewsUpdatedAt:
-		return 170
+	case domain.StatsColumnPublishDate:
+		return 150
+	case domain.StatsColumnViewsUpdatedAt:
+		return 210
 	case domain.StatsColumnVideoURL:
 		return 360
 	case domain.StatsColumnViews:

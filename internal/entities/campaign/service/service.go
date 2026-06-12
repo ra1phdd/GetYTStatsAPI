@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -39,6 +40,8 @@ type Store interface {
 	ListUserCampaigns(context.Context, int64) ([]domain.Campaign, error)
 	SaveCampaignSnapshot(context.Context, domain.Campaign, domain.CampaignSnapshot) (domain.CampaignSnapshot, error)
 	CloseCampaign(context.Context, int64, time.Time, string) error
+	UpdateCampaignColumns(context.Context, int64, []domain.StatsColumn) error
+	UpdateCampaignTarget(context.Context, int64, *int64, string, *time.Time, string, *time.Time) error
 	UpdateCampaignSpreadsheet(context.Context, int64, string, string) error
 	GetLatestSnapshot(context.Context, int64) (domain.CampaignSnapshot, error)
 	GetLatestSnapshotWithVideos(context.Context, int64) (domain.CampaignSnapshot, error)
@@ -260,6 +263,10 @@ func (s *Service) UpdateUserSettings(ctx context.Context, settings domain.UserSe
 	if _, _, err := domain.ParseNotificationTime(settings.NotificationTime); err != nil {
 		return domain.UserSettings{}, fmt.Errorf("%w: %w", core_errors.ErrInvalidArgument, err)
 	}
+	settings.NotificationIntervalMinutes = domain.NormalizeNotificationIntervalMinutes(settings.NotificationIntervalMinutes)
+	if err := domain.ValidateNotificationIntervalMinutes(settings.NotificationIntervalMinutes); err != nil {
+		return domain.UserSettings{}, fmt.Errorf("%w: %w", core_errors.ErrInvalidArgument, err)
+	}
 	if strings.TrimSpace(settings.Timezone) == "" {
 		settings.Timezone = domain.DefaultUserTimezone
 	}
@@ -412,6 +419,35 @@ func (s *Service) CloseCampaign(ctx context.Context, userID int64, campaignID in
 	return item, nil
 }
 
+func (s *Service) UpdateCampaignColumns(ctx context.Context, userID int64, campaignID int64, columns []domain.StatsColumn) (domain.Campaign, error) {
+	item, err := s.GetCampaign(ctx, userID, campaignID)
+	if err != nil {
+		return domain.Campaign{}, err
+	}
+	columns = domain.NormalizeStatsColumns(columns)
+	if err := s.store.UpdateCampaignColumns(ctx, item.ID, columns); err != nil {
+		return domain.Campaign{}, err
+	}
+	item.Columns = columns
+	return item, nil
+}
+
+func (s *Service) UpdateCampaignTarget(ctx context.Context, userID int64, campaignID int64, targetViews *int64) (domain.Campaign, error) {
+	item, err := s.GetCampaign(ctx, userID, campaignID)
+	if err != nil {
+		return domain.Campaign{}, err
+	}
+	if targetViews != nil && *targetViews <= 0 {
+		return domain.Campaign{}, fmt.Errorf("%w: target_views must be positive", core_errors.ErrInvalidArgument)
+	}
+	item.TargetViews = targetViews
+	item = s.recalculateTargetState(item)
+	if err := s.store.UpdateCampaignTarget(ctx, item.ID, item.TargetViews, item.Status, item.ClosedAt, item.CloseReason, item.EstimatedCloseDate); err != nil {
+		return domain.Campaign{}, err
+	}
+	return item, nil
+}
+
 func (s *Service) RefreshCampaign(ctx context.Context, userID int64, campaignID int64) (domain.Campaign, domain.CampaignSnapshot, bool, error) {
 	item, err := s.GetCampaign(ctx, userID, campaignID)
 	if err != nil {
@@ -452,7 +488,12 @@ func (s *Service) ExportCampaignCSV(ctx context.Context, token string) ([]byte, 
 		}
 	}
 
-	data, err := s.stats.BuildCSV(snapshot.Videos, domain.NormalizeStatsColumns(item.Columns))
+	columns := domain.NormalizeStatsColumns(item.Columns)
+	snapshot.Videos, err = s.stats.PopulateSponsorSegments(ctx, snapshot.Videos, columns)
+	if err != nil {
+		return nil, "", err
+	}
+	data, err := s.stats.BuildCSV(snapshot.Videos, columns)
 	if err != nil {
 		return nil, "", err
 	}
@@ -498,6 +539,46 @@ func (s *Service) BuildDraftPayload(draft CreateCampaignDraft) (string, error) {
 		return "", fmt.Errorf("build draft payload: %w", err)
 	}
 	return string(data), nil
+}
+
+func (s *Service) recalculateTargetState(item domain.Campaign) domain.Campaign {
+	if item.CloseReason == domain.CampaignCloseReasonManual && item.ClosedAt != nil {
+		item.Status = domain.CampaignStatusClosed
+		return item
+	}
+
+	if item.TargetViews == nil {
+		item.ClosedAt = nil
+		item.CloseReason = ""
+		item.EstimatedCloseDate = nil
+		item.Status = s.resolveStatus(s.now(), item)
+		return item
+	}
+
+	remaining := *item.TargetViews - item.LastTotalViews
+	if remaining <= 0 {
+		closedAt := s.now().UTC()
+		if item.LastSnapshotAt != nil {
+			closedAt = item.LastSnapshotAt.UTC()
+		}
+		item.ClosedAt = &closedAt
+		item.CloseReason = domain.CampaignCloseReasonTargetReached
+		item.EstimatedCloseDate = nil
+		item.Status = domain.CampaignStatusClosed
+		return item
+	}
+
+	item.ClosedAt = nil
+	item.CloseReason = ""
+	item.EstimatedCloseDate = nil
+	if item.LastDailyGrowth != nil && *item.LastDailyGrowth > 0 && item.LastSnapshotAt != nil {
+		if days := domain.EstimateCloseInDays(remaining, *item.LastDailyGrowth); days != nil {
+			date := item.LastSnapshotAt.AddDate(0, 0, int(*days))
+			item.EstimatedCloseDate = &date
+		}
+	}
+	item.Status = s.resolveStatus(s.now(), item)
+	return item
 }
 
 func (s *Service) ProcessDueNotifications(ctx context.Context, notifier Notifier) error {
@@ -587,7 +668,7 @@ func (s *Service) refreshCampaign(ctx context.Context, campaign domain.Campaign,
 		if err != nil {
 			return domain.Campaign{}, domain.CampaignSnapshot{}, false, err
 		}
-		if ok {
+		if ok && canReuseSnapshot(snapshot, s.now()) {
 			campaign.LastSnapshotAt = &snapshot.SnapshotAt
 			campaign.LastTotalViews = snapshot.TotalViews
 			campaign.LastDailyGrowth = snapshot.DailyGrowth
@@ -619,15 +700,11 @@ func (s *Service) refreshCampaign(ctx context.Context, campaign domain.Campaign,
 	}
 
 	snapshotTime := s.now().UTC()
-	var previous *domain.CampaignSnapshot
-	if candidate, err := s.store.GetPreviousSnapshot(ctx, campaign.ID, snapshotTime); err == nil {
-		previous = &candidate
-	}
-
 	var dailyGrowth *int64
-	if previous != nil {
-		value := totalViews - previous.TotalViews
-		dailyGrowth = &value
+	if baseline, normalize, ok, err := s.dailyGrowthBaselineSnapshot(ctx, campaign, snapshotTime); err != nil {
+		return domain.Campaign{}, domain.CampaignSnapshot{}, false, err
+	} else if ok {
+		dailyGrowth = calculateDailyGrowth(totalViews, snapshotTime, baseline, normalize)
 	}
 
 	var remaining *int64
@@ -710,21 +787,34 @@ func (s *Service) started(campaign domain.Campaign, now time.Time) bool {
 }
 
 func (s *Service) isNotificationDue(now time.Time, settings domain.UserSettings) (bool, error) {
+	intervalMinutes := domain.NormalizeNotificationIntervalMinutes(settings.NotificationIntervalMinutes)
+	if err := domain.ValidateNotificationIntervalMinutes(intervalMinutes); err != nil {
+		return false, err
+	}
+	interval := time.Duration(intervalMinutes) * time.Minute
 	loc := mustLoadLocation(settings.Timezone)
 	hour, minute, err := domain.ParseNotificationTime(settings.NotificationTime)
 	if err != nil {
 		return false, err
 	}
 	nowLocal := now.In(loc)
-	target := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), hour, minute, 0, 0, loc)
-	if nowLocal.Before(target) {
-		return false, nil
+	currentAnchor := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), hour, minute, 0, 0, loc)
+	if interval%(24*time.Hour) != 0 {
+		if settings.LastNotificationSentAt == nil {
+			return true, nil
+		}
+		return settings.LastNotificationSentAt.UTC().Add(interval).Before(now) || settings.LastNotificationSentAt.UTC().Add(interval).Equal(now), nil
 	}
 	if settings.LastNotificationSentAt == nil {
-		return true, nil
+		return !nowLocal.Before(currentAnchor), nil
 	}
 	lastLocal := settings.LastNotificationSentAt.In(loc)
-	return lastLocal.Before(target), nil
+	lastAnchor := time.Date(lastLocal.Year(), lastLocal.Month(), lastLocal.Day(), hour, minute, 0, 0, loc)
+	nextAnchor := lastAnchor
+	if !lastLocal.Before(lastAnchor) {
+		nextAnchor = nextAnchor.Add(interval)
+	}
+	return !nowLocal.Before(nextAnchor), nil
 }
 
 func campaignStartTime(campaign domain.Campaign) (time.Time, error) {
@@ -749,6 +839,54 @@ func refreshCooldownRemaining(campaign domain.Campaign, now time.Time) time.Dura
 		return 0
 	}
 	return remaining
+}
+
+func canReuseSnapshot(snapshot domain.CampaignSnapshot, now time.Time) bool {
+	return !snapshot.SnapshotAt.Add(forcedRefreshCooldown).Before(now.UTC())
+}
+
+func (s *Service) dailyGrowthBaselineSnapshot(ctx context.Context, campaign domain.Campaign, snapshotTime time.Time) (domain.CampaignSnapshot, bool, bool, error) {
+	loc := mustLoadLocation(campaign.Timezone)
+	todayStart := startOfDay(snapshotTime.In(loc))
+	yesterdayStart := todayStart.AddDate(0, 0, -1)
+
+	if candidate, err := s.store.GetPreviousSnapshot(ctx, campaign.ID, todayStart.UTC()); err == nil {
+		candidateDay := startOfDay(candidate.SnapshotAt.In(loc))
+		if candidateDay.Equal(yesterdayStart) {
+			return candidate, false, true, nil
+		}
+	} else if !errors.Is(err, core_errors.ErrNotFound) {
+		return domain.CampaignSnapshot{}, false, false, err
+	}
+
+	candidate, err := s.store.GetPreviousSnapshot(ctx, campaign.ID, snapshotTime)
+	if err != nil {
+		if errors.Is(err, core_errors.ErrNotFound) {
+			return domain.CampaignSnapshot{}, false, false, nil
+		}
+		return domain.CampaignSnapshot{}, false, false, err
+	}
+	if snapshotTime.Sub(candidate.SnapshotAt) >= 24*time.Hour {
+		return domain.CampaignSnapshot{}, false, false, nil
+	}
+	return candidate, true, true, nil
+}
+
+func calculateDailyGrowth(totalViews int64, snapshotTime time.Time, previous domain.CampaignSnapshot, normalize bool) *int64 {
+	change := totalViews - previous.TotalViews
+	if !normalize {
+		return &change
+	}
+	interval := snapshotTime.Sub(previous.SnapshotAt)
+	if interval <= 0 {
+		return nil
+	}
+	value := int64(math.Round(float64(change) * float64(24*time.Hour) / float64(interval)))
+	return &value
+}
+
+func startOfDay(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
 }
 
 func humanizeDuration(value time.Duration) string {

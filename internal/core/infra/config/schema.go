@@ -15,13 +15,13 @@ var NewSecureString = base.NewSecureString
 
 type Main struct {
 	LoggerLevel      string        `json:"logger_level" yaml:"logger_level" env:"LOGGER_LEVEL"`
-	HTTP             HTTP          `json:"http" yaml:"http" envPrefix:"HTTP_"`
+	HTTP             HTTP          `json:"http" yaml:"http" envPrefix:"API_HTTP_"`
 	Database         Database      `json:"database" yaml:"database" envPrefix:"DATABASE_"`
 	YouTubeAPIKey    SecureString  `json:"youtube_api_key,omitzero" yaml:"youtube_api_key,omitempty" env:"YOUTUBE_API_KEY"`
 	GoogleOAuth      GoogleOAuth   `json:"google_oauth" yaml:"google_oauth" envPrefix:"GOOGLE_OAUTH_"`
-	TelegramAuth     TelegramAuth  `json:"telegram" yaml:"telegram" envPrefix:"TELEGRAM_"`
+	Telegram         TelegramBot   `json:"telegram" yaml:"telegram" envPrefix:"TELEGRAM_"`
 	Notifications    Notifications `json:"notifications" yaml:"notifications" envPrefix:"NOTIFICATIONS_"`
-	Internal         ServiceAuth   `json:"internal" yaml:"internal" envPrefix:"API_INTERNAL_"`
+	Internal         InternalApps  `json:"internal" yaml:"internal" envPrefix:"INTERNAL_"`
 	PublicBaseURL    string        `json:"public_base_url" yaml:"public_base_url" env:"PUBLIC_BASE_URL"`
 	ExportJWTSecret  SecureString  `json:"export_jwt_secret,omitzero" yaml:"export_jwt_secret,omitempty" env:"EXPORT_JWT_SECRET"`
 	AccessJWTSecret  SecureString  `json:"access_jwt_secret,omitzero" yaml:"access_jwt_secret,omitempty" env:"ACCESS_JWT_SECRET"`
@@ -35,14 +35,15 @@ type HTTPServer struct {
 }
 
 type Telegram struct {
-	LoggerLevel string       `json:"logger_level" yaml:"logger_level" env:"LOGGER_LEVEL"`
-	Token       SecureString `json:"token,omitzero" yaml:"token,omitempty" env:"TELEGRAM_BOT_TOKEN"`
-	Webhook     HTTP         `json:"webhook" yaml:"webhook" envPrefix:"WEBHOOK_"`
-	API         APIClient    `json:"api" yaml:"api" envPrefix:"API_"`
-	Internal    ServiceAuth  `json:"internal" yaml:"internal" envPrefix:"BOT_INTERNAL_"`
+	LoggerLevel   string        `json:"logger_level" yaml:"logger_level" env:"LOGGER_LEVEL"`
+	Telegram      TelegramBot   `json:"telegram" yaml:"telegram" envPrefix:"TELEGRAM_"`
+	HTTP          HTTP          `json:"http" yaml:"http" envPrefix:"TELEGRAM_HTTP_"`
+	API           APIClient     `json:"api" yaml:"api" envPrefix:"API_"`
+	Notifications Notifications `json:"notifications" yaml:"notifications" envPrefix:"NOTIFICATIONS_"`
+	Internal      InternalApps  `json:"internal" yaml:"internal" envPrefix:"INTERNAL_"`
 }
 
-type TelegramAuth struct {
+type TelegramBot struct {
 	BotToken SecureString `json:"bot_token,omitzero" yaml:"bot_token,omitempty" env:"BOT_TOKEN"`
 }
 
@@ -65,6 +66,11 @@ type ServiceAuth struct {
 	ServiceSecret     SecureString `json:"service_secret,omitzero" yaml:"service_secret,omitempty" env:"SERVICE_SECRET"`
 	PeerServiceID     string       `json:"peer_service_id" yaml:"peer_service_id" env:"PEER_SERVICE_ID"`
 	PeerServiceSecret SecureString `json:"peer_service_secret,omitzero" yaml:"peer_service_secret,omitempty" env:"PEER_SERVICE_SECRET"`
+}
+
+type InternalApps struct {
+	API ServiceAuth `json:"api" yaml:"api" envPrefix:"API_"`
+	Bot ServiceAuth `json:"bot" yaml:"bot" envPrefix:"BOT_"`
 }
 
 type HTTP struct {
@@ -134,8 +140,11 @@ func (c *Main) Validate() error {
 	if strings.TrimSpace(c.Database.Name) == "" {
 		return fmt.Errorf("%w: database.name is required", base.ErrInvalidConfig)
 	}
-	if strings.TrimSpace(c.TelegramAuth.BotToken.String()) == "" {
-		return fmt.Errorf("%w: telegram_auth.bot_token is required", base.ErrInvalidConfig)
+	if strings.TrimSpace(c.Telegram.BotToken.String()) == "" {
+		return fmt.Errorf("%w: telegram.bot_token is required", base.ErrInvalidConfig)
+	}
+	if strings.TrimSpace(c.HTTP.Address) == "" {
+		return fmt.Errorf("%w: api http.address is required", base.ErrInvalidConfig)
 	}
 	if strings.TrimSpace(c.Notifications.WebhookURL) == "" {
 		return fmt.Errorf("%w: notifications.webhook_url is required", base.ErrInvalidConfig)
@@ -145,11 +154,11 @@ func (c *Main) Validate() error {
 			return fmt.Errorf("%w: google_oauth.client_id and google_oauth.client_secret must be configured together", base.ErrInvalidConfig)
 		}
 	}
-	if strings.TrimSpace(c.Internal.ServiceID) == "" || strings.TrimSpace(c.Internal.ServiceSecret.String()) == "" {
-		return fmt.Errorf("%w: internal service credentials are required", base.ErrInvalidConfig)
+	if strings.TrimSpace(c.Internal.API.ServiceID) == "" || strings.TrimSpace(c.Internal.API.ServiceSecret.String()) == "" {
+		return fmt.Errorf("%w: internal.api service credentials are required", base.ErrInvalidConfig)
 	}
-	if strings.TrimSpace(c.Internal.PeerServiceID) == "" || strings.TrimSpace(c.Internal.PeerServiceSecret.String()) == "" {
-		return fmt.Errorf("%w: internal peer service credentials are required", base.ErrInvalidConfig)
+	if strings.TrimSpace(c.Internal.API.PeerServiceID) == "" || strings.TrimSpace(c.Internal.API.PeerServiceSecret.String()) == "" {
+		return fmt.Errorf("%w: internal.api peer service credentials are required", base.ErrInvalidConfig)
 	}
 	if strings.TrimSpace(c.PublicBaseURL) == "" {
 		return fmt.Errorf("%w: public_base_url is required", base.ErrInvalidConfig)
@@ -183,20 +192,20 @@ func (c *Telegram) Validate() error {
 	if c == nil {
 		return base.ErrNilConfig
 	}
-	if strings.TrimSpace(c.Token.String()) == "" {
-		return fmt.Errorf("%w: token is required", base.ErrInvalidConfig)
+	if strings.TrimSpace(c.Telegram.BotToken.String()) == "" {
+		return fmt.Errorf("%w: telegram.bot_token is required", base.ErrInvalidConfig)
 	}
-	if strings.TrimSpace(c.Webhook.Address) == "" {
-		return fmt.Errorf("%w: webhook.address is required", base.ErrInvalidConfig)
+	if strings.TrimSpace(c.HTTP.Address) == "" {
+		return fmt.Errorf("%w: telegram http.address is required", base.ErrInvalidConfig)
 	}
 	if strings.TrimSpace(c.API.BaseURL) == "" {
 		return fmt.Errorf("%w: api.base_url is required", base.ErrInvalidConfig)
 	}
-	if strings.TrimSpace(c.Internal.ServiceID) == "" || strings.TrimSpace(c.Internal.ServiceSecret.String()) == "" {
-		return fmt.Errorf("%w: internal service credentials are required", base.ErrInvalidConfig)
+	if strings.TrimSpace(c.Internal.Bot.ServiceID) == "" || strings.TrimSpace(c.Internal.Bot.ServiceSecret.String()) == "" {
+		return fmt.Errorf("%w: internal.bot service credentials are required", base.ErrInvalidConfig)
 	}
-	if strings.TrimSpace(c.Internal.PeerServiceID) == "" || strings.TrimSpace(c.Internal.PeerServiceSecret.String()) == "" {
-		return fmt.Errorf("%w: internal peer service credentials are required", base.ErrInvalidConfig)
+	if strings.TrimSpace(c.Internal.Bot.PeerServiceID) == "" || strings.TrimSpace(c.Internal.Bot.PeerServiceSecret.String()) == "" {
+		return fmt.Errorf("%w: internal.bot peer service credentials are required", base.ErrInvalidConfig)
 	}
 	return nil
 }
@@ -236,11 +245,15 @@ func DefaultHTTP() *HTTPServer {
 func DefaultTelegram() *Telegram {
 	return &Telegram{
 		LoggerLevel: "warn",
-		Webhook: HTTP{
+		Telegram:    TelegramBot{},
+		HTTP: HTTP{
 			Address: ":8081",
 		},
 		API: APIClient{
 			BaseURL: "http://127.0.0.1:8080",
+		},
+		Notifications: Notifications{
+			WebhookURL: "http://127.0.0.1:8081",
 		},
 	}
 }

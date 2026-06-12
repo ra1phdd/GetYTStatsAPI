@@ -28,15 +28,18 @@ const (
 	mainMenuCampaigns = "Рекламные кампании"
 	mainMenuSettings  = "Настройки"
 
-	flowCampaignCreate            = "campaign_create"
-	stateCampaignKeyword          = "campaign_create_keyword"
-	stateCampaignColumns          = "campaign_create_columns"
-	stateCampaignManualTarget     = "campaign_create_manual_target"
-	stateCampaignStartDate        = "campaign_create_start_date"
-	stateSettingsAddChannel       = "settings_add_channel"
-	stateSettingsConfirmChannel   = "settings_confirm_channel"
-	stateSettingsNotificationTime = "settings_notification_time"
-	stateSettingsTimezone         = "settings_timezone"
+	flowCampaignCreate                = "campaign_create"
+	stateCampaignKeyword              = "campaign_create_keyword"
+	stateCampaignColumns              = "campaign_create_columns"
+	stateCampaignManualTarget         = "campaign_create_manual_target"
+	stateCampaignStartDate            = "campaign_create_start_date"
+	stateCampaignUpdateColumns        = "campaign_update_columns"
+	stateCampaignUpdateTarget         = "campaign_update_target"
+	stateSettingsAddChannel           = "settings_add_channel"
+	stateSettingsConfirmChannel       = "settings_confirm_channel"
+	stateSettingsNotificationTime     = "settings_notification_time"
+	stateSettingsNotificationInterval = "settings_notification_interval"
+	stateSettingsTimezone             = "settings_timezone"
 )
 
 type Handler struct {
@@ -57,6 +60,18 @@ type pendingChannelVerification struct {
 	OriginalInput    string `json:"original_input,omitempty"`
 }
 
+type pendingCampaignColumnsEdit struct {
+	CampaignID int64                `json:"campaign_id"`
+	Origin     campaignListOrigin   `json:"origin"`
+	Columns    []domain.StatsColumn `json:"columns"`
+}
+
+type pendingCampaignTargetEdit struct {
+	CampaignID  int64              `json:"campaign_id"`
+	Origin      campaignListOrigin `json:"origin"`
+	TargetViews *int64             `json:"target_views,omitempty"`
+}
+
 func NewHandler(log *logger.Logger, client *campaignapi_client.Client, input *core_telegram_input.Telegram) *Handler {
 	if log == nil {
 		log = logger.New(logger.WithComponent("campaign.telegram.handler"))
@@ -70,9 +85,11 @@ func NewHandler(log *logger.Logger, client *campaignapi_client.Client, input *co
 		input.RegisterHandler(stateCampaignColumns, h.handleCampaignColumnsText)
 		input.RegisterHandler(stateCampaignManualTarget, h.handleCampaignManualTarget)
 		input.RegisterHandler(stateCampaignStartDate, h.handleCampaignStartDate)
+		input.RegisterHandler(stateCampaignUpdateTarget, h.handleCampaignUpdateTargetText)
 		input.RegisterHandler(stateSettingsAddChannel, h.handleAddChannelText)
 		input.RegisterHandler(stateSettingsConfirmChannel, h.handleAddChannelText)
 		input.RegisterHandler(stateSettingsNotificationTime, h.handleNotificationTimeText)
+		input.RegisterHandler(stateSettingsNotificationInterval, h.handleNotificationIntervalText)
 		input.RegisterHandler(stateSettingsTimezone, h.handleTimezoneText)
 		input.SetUnknownCommandMessage("Используйте кнопки меню или /start")
 	}
@@ -124,12 +141,30 @@ func (h *Handler) OnCallback(c tele.Context) error {
 		return h.refreshCampaign(c, data)
 	case strings.HasPrefix(data, "campaigns:sheet:"):
 		return h.createCampaignSpreadsheet(c, data)
+	case strings.HasPrefix(data, "campaigns:update-columns:"):
+		return h.beginCampaignColumnsUpdate(c, data)
+	case strings.HasPrefix(data, "campaigns:update-columns-action:"):
+		return h.handleCampaignUpdateColumnsAction(c, data)
+	case strings.HasPrefix(data, "campaigns:update-target:"):
+		return h.beginCampaignTargetUpdate(c, data)
+	case strings.HasPrefix(data, "campaigns:update-target-action:"):
+		return h.handleCampaignUpdateTargetAction(c, data)
 	case strings.HasPrefix(data, "campaigns:create:channel:"):
 		return h.selectCreateChannel(c, data)
 	case strings.HasPrefix(data, "campaigns:create:target:"):
 		return h.selectCreateTarget(c, data)
 	case strings.HasPrefix(data, "campaigns:create:columns:"):
 		return h.handleCampaignColumnsAction(c, data)
+	case data == "campaigns:create:back:channels":
+		return h.backToCreateChannels(c)
+	case data == "campaigns:create:back:target":
+		return h.backToCreateTarget(c)
+	case data == "campaigns:create:back:columns":
+		return h.backToCreateColumns(c)
+	case data == "campaigns:create:back:keyword":
+		return h.backToCreateKeyword(c)
+	case data == "campaigns:create:back:start-date":
+		return h.backToCreateStartDate(c)
 	case data == "campaigns:create:start:today":
 		return h.selectCreateStartDateToday(c)
 	case data == "campaigns:create:confirm":
@@ -158,6 +193,10 @@ func (h *Handler) OnCallback(c tele.Context) error {
 		return h.toggleNotifications(c)
 	case data == "settings:notifications:time":
 		return h.promptNotificationTime(c)
+	case data == "settings:notifications:interval":
+		return h.promptNotificationInterval(c)
+	case strings.HasPrefix(data, "settings:notifications:interval:set:"):
+		return h.setNotificationIntervalPreset(c, data)
 	case data == "settings:notifications:timezone":
 		return h.promptTimezone(c)
 	default:
@@ -294,6 +333,128 @@ func (h *Handler) createCampaignSpreadsheet(c tele.Context, data string) error {
 	return respond(c, "<b>✅ Google Таблица создана.</b>\n\n"+formatCampaign(item), campaignDetailMenu(item, origin, settings))
 }
 
+func (h *Handler) beginCampaignColumnsUpdate(c tele.Context, data string) error {
+	id, origin, err := parseCampaignAction(data, "update-columns")
+	if err != nil {
+		return respond(c, "<b>Некорректный идентификатор кампании.</b>", nil)
+	}
+	item, err := h.client.GetCampaign(context.Background(), c.Sender().ID, id)
+	if err != nil {
+		return respond(c, "<b>Не удалось получить кампанию.</b>", nil)
+	}
+	pending := pendingCampaignColumnsEdit{CampaignID: item.ID, Origin: origin, Columns: normalizedDraftColumns(item.Columns)}
+	if err := h.savePendingCampaignColumnsEdit(c.Sender().ID, pending); err != nil {
+		return respond(c, "<b>Не удалось открыть редактор столбцов.</b>", nil)
+	}
+	return h.showCampaignUpdateColumnsEditor(c, pending)
+}
+
+func (h *Handler) handleCampaignUpdateColumnsAction(c tele.Context, data string) error {
+	pending, err := h.loadPendingCampaignColumnsEdit(c.Sender().ID)
+	if err != nil {
+		return respond(c, "<b>Не удалось восстановить редактор столбцов.</b>", nil)
+	}
+	action := strings.TrimPrefix(data, "campaigns:update-columns-action:")
+	if action == "reset" {
+		pending.Columns = domain.DefaultStatsColumns()
+		if err := h.savePendingCampaignColumnsEdit(c.Sender().ID, pending); err != nil {
+			return respond(c, "<b>Не удалось сохранить столбцы.</b>", nil)
+		}
+		return h.showCampaignUpdateColumnsEditor(c, pending)
+	}
+	if action == "done" {
+		item, err := h.client.UpdateCampaignColumns(context.Background(), c.Sender().ID, pending.CampaignID, normalizedDraftColumns(pending.Columns))
+		if err != nil {
+			return respond(c, "<b>Не удалось обновить столбцы кампании.</b>", nil)
+		}
+		_ = h.client.DeleteInputSession(context.Background(), c.Sender().ID)
+		h.input.Clear(c.Sender().ID)
+		settings, _ := h.client.GetSettings(context.Background(), c.Sender().ID)
+		return respond(c, "<b>✅ Столбцы обновлены.</b>\n\n"+formatCampaign(item), campaignDetailMenu(item, pending.Origin, settings))
+	}
+	if action == "cancel" {
+		_ = h.client.DeleteInputSession(context.Background(), c.Sender().ID)
+		h.input.Clear(c.Sender().ID)
+		return h.showCampaignDetail(c, formatCampaignViewCallback(pending.CampaignID, pending.Origin.Status, pending.Origin.Page))
+	}
+	parts := strings.SplitN(action, ":", 2)
+	if len(parts) != 2 {
+		return respond(c, "<b>Некорректное действие со столбцами.</b>", nil)
+	}
+	column := domain.StatsColumn(strings.TrimSpace(parts[1]))
+	if !domain.IsValidStatsColumn(column) {
+		return respond(c, "<b>Некорректный столбец.</b>", nil)
+	}
+	switch parts[0] {
+	case "toggle":
+		pending.Columns = toggleDraftColumn(pending.Columns, column)
+	case "up":
+		pending.Columns = moveDraftColumn(pending.Columns, column, -1)
+	case "down":
+		pending.Columns = moveDraftColumn(pending.Columns, column, 1)
+	case "remove":
+		pending.Columns = removeDraftColumn(pending.Columns, column)
+	default:
+		return respond(c, "<b>Некорректное действие со столбцами.</b>", nil)
+	}
+	if err := h.savePendingCampaignColumnsEdit(c.Sender().ID, pending); err != nil {
+		return respond(c, "<b>Не удалось сохранить столбцы.</b>", nil)
+	}
+	return h.showCampaignUpdateColumnsEditor(c, pending)
+}
+
+func (h *Handler) beginCampaignTargetUpdate(c tele.Context, data string) error {
+	id, origin, err := parseCampaignAction(data, "update-target")
+	if err != nil {
+		return respond(c, "<b>Некорректный идентификатор кампании.</b>", nil)
+	}
+	item, err := h.client.GetCampaign(context.Background(), c.Sender().ID, id)
+	if err != nil {
+		return respond(c, "<b>Не удалось получить кампанию.</b>", nil)
+	}
+	pending := pendingCampaignTargetEdit{CampaignID: item.ID, Origin: origin, TargetViews: item.TargetViews}
+	if err := h.savePendingCampaignTargetEdit(c.Sender().ID, pending); err != nil {
+		return respond(c, "<b>Не удалось открыть редактор цели.</b>", nil)
+	}
+	return h.showCampaignTargetUpdateEditor(c, pending)
+}
+
+func (h *Handler) handleCampaignUpdateTargetAction(c tele.Context, data string) error {
+	pending, err := h.loadPendingCampaignTargetEdit(c.Sender().ID)
+	if err != nil {
+		return respond(c, "<b>Не удалось восстановить редактор цели.</b>", nil)
+	}
+	action := strings.TrimPrefix(data, "campaigns:update-target-action:")
+	if action == "cancel" {
+		_ = h.client.DeleteInputSession(context.Background(), c.Sender().ID)
+		h.input.Clear(c.Sender().ID)
+		return h.showCampaignDetail(c, formatCampaignViewCallback(pending.CampaignID, pending.Origin.Status, pending.Origin.Page))
+	}
+	if action == "none" {
+		pending.TargetViews = nil
+		return h.applyCampaignTargetUpdate(c, pending)
+	}
+	value, err := strconv.ParseInt(action, 10, 64)
+	if err != nil {
+		return respond(c, "<b>Некорректная цель кампании.</b>", nil)
+	}
+	pending.TargetViews = &value
+	return h.applyCampaignTargetUpdate(c, pending)
+}
+
+func (h *Handler) handleCampaignUpdateTargetText(c tele.Context) error {
+	value, err := parseViews(strings.TrimSpace(c.Text()))
+	if err != nil {
+		return respond(c, "<b>Не удалось распознать число просмотров.</b>\nПопробуйте еще раз.", nil)
+	}
+	pending, err := h.loadPendingCampaignTargetEdit(c.Sender().ID)
+	if err != nil {
+		return respond(c, "<b>Не удалось восстановить редактор цели.</b>", nil)
+	}
+	pending.TargetViews = &value
+	return h.applyCampaignTargetUpdate(c, pending)
+}
+
 func (h *Handler) beginCampaignCreate(c tele.Context) error {
 	channels, err := h.client.ListChannels(context.Background(), c.Sender().ID)
 	if err != nil {
@@ -305,11 +466,18 @@ func (h *Handler) beginCampaignCreate(c tele.Context) error {
 	if err := h.saveDraft(c.Sender().ID, stateCampaignKeyword, campaign_service.CreateCampaignDraft{Columns: domain.DefaultStatsColumns()}); err != nil {
 		return respond(c, "<b>Не удалось открыть создание кампании.</b>", nil)
 	}
+	return h.showCampaignChannelSelection(c, channels)
+}
+
+func (h *Handler) showCampaignChannelSelection(c tele.Context, channels []domain.UserChannel) error {
 	rows := make([][]core_telegram_ui.Button, 0, len(channels)+1)
 	for _, channel := range channels {
 		rows = append(rows, core_telegram_ui.Row(core_telegram_ui.Btn(channelButtonLabel(channel), "campaigns:create:channel:"+channel.ChannelID)))
 	}
-	rows = append(rows, core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")))
+	rows = append(rows,
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:menu")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
+	)
 	return respond(c, "<b>🆕 Новая рекламная кампания</b>\nВыберите канал для новой РК.", core_telegram_ui.InlineMenu(rows...))
 }
 
@@ -324,11 +492,17 @@ func (h *Handler) selectCreateChannel(c tele.Context, data string) error {
 		return respond(c, "<b>Не удалось сохранить канал кампании.</b>", nil)
 	}
 	h.input.Set(c.Sender().ID, stateCampaignManualTarget)
+	return h.showCampaignTargetSelection(c)
+}
+
+func (h *Handler) showCampaignTargetSelection(c tele.Context) error {
+	h.input.Set(c.Sender().ID, stateCampaignManualTarget)
 	menu := core_telegram_ui.InlineMenu(
 		core_telegram_ui.Row(core_telegram_ui.Btn("250K", "campaigns:create:target:250000"), core_telegram_ui.Btn("500K", "campaigns:create:target:500000")),
 		core_telegram_ui.Row(core_telegram_ui.Btn("750K", "campaigns:create:target:750000"), core_telegram_ui.Btn("1 МЛН", "campaigns:create:target:1000000")),
 		core_telegram_ui.Row(core_telegram_ui.Btn("1.5 МЛН", "campaigns:create:target:1500000"), core_telegram_ui.Btn("2 МЛН", "campaigns:create:target:2000000")),
 		core_telegram_ui.Row(core_telegram_ui.Btn("3 МЛН", "campaigns:create:target:3000000"), core_telegram_ui.Btn("Не задано", "campaigns:create:target:none")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:create:back:channels")),
 		core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
 	)
 	return respond(c, "<b>🎯 Шаг 2 из 5</b>\nВыберите цель по просмотрам или отправьте число сообщением.", menu)
@@ -365,7 +539,10 @@ func (h *Handler) selectCreateTarget(c tele.Context, data string) error {
 func (h *Handler) handleCampaignManualTarget(c tele.Context) error {
 	value, err := parseViews(strings.TrimSpace(c.Text()))
 	if err != nil {
-		return respond(c, "<b>Не удалось распознать число просмотров.</b>\nПопробуйте еще раз.", nil)
+		return respond(c, "<b>Не удалось распознать число просмотров.</b>\nПопробуйте еще раз.", core_telegram_ui.InlineMenu(
+			core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:create:back:target")),
+			core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
+		))
 	}
 	draft, err := h.loadDraft(c.Sender().ID)
 	if err != nil {
@@ -390,13 +567,18 @@ func (h *Handler) showCampaignColumnsEditor(c tele.Context, draft campaign_servi
 	h.input.Set(c.Sender().ID, stateCampaignColumns)
 	rows := make([][]core_telegram_ui.Button, 0, len(draft.Columns)+8)
 	for idx, column := range draft.Columns {
-		buttons := []core_telegram_ui.Button{core_telegram_ui.Btn(statsColumnLabel(column), fmt.Sprintf("campaigns:create:columns:toggle:%s", column))}
+		buttons := []core_telegram_ui.Button{core_telegram_ui.Btn(statsColumnLabel(column), "campaigns:noop")}
 		if idx > 0 {
 			buttons = append(buttons, core_telegram_ui.Btn("⬆️", fmt.Sprintf("campaigns:create:columns:up:%s", column)))
+		} else {
+			buttons = append(buttons, core_telegram_ui.Btn(" ", "campaigns:noop"))
 		}
 		if idx < len(draft.Columns)-1 {
 			buttons = append(buttons, core_telegram_ui.Btn("⬇️", fmt.Sprintf("campaigns:create:columns:down:%s", column)))
+		} else {
+			buttons = append(buttons, core_telegram_ui.Btn(" ", "campaigns:noop"))
 		}
+		buttons = append(buttons, core_telegram_ui.Btn("✖️", fmt.Sprintf("campaigns:create:columns:remove:%s", column)))
 		rows = append(rows, core_telegram_ui.Row(buttons...))
 	}
 	for _, column := range allStatsColumns() {
@@ -406,7 +588,9 @@ func (h *Handler) showCampaignColumnsEditor(c tele.Context, draft campaign_servi
 		rows = append(rows, core_telegram_ui.Row(core_telegram_ui.Btn("➕ "+statsColumnLabel(column), fmt.Sprintf("campaigns:create:columns:toggle:%s", column))))
 	}
 	rows = append(rows,
+		core_telegram_ui.Row(core_telegram_ui.Btn("↺ Сбросить по умолчанию", "campaigns:create:columns:reset")),
 		core_telegram_ui.Row(core_telegram_ui.Btn("✅ Продолжить", "campaigns:create:columns:done")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:create:back:target")),
 		core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
 	)
 	return respond(c, "<b>🧩 Шаг 3 из 5</b>\nВыберите столбцы для таблицы и настройте их порядок.", core_telegram_ui.InlineMenu(rows...))
@@ -419,12 +603,15 @@ func (h *Handler) handleCampaignColumnsAction(c tele.Context, data string) error
 	}
 	draft.Columns = normalizedDraftColumns(draft.Columns)
 	action := strings.TrimPrefix(data, "campaigns:create:columns:")
+	if action == "reset" {
+		draft.Columns = domain.DefaultStatsColumns()
+		return h.showCampaignColumnsEditor(c, draft)
+	}
 	if action == "done" {
 		if err := h.saveDraft(c.Sender().ID, stateCampaignKeyword, draft); err != nil {
 			return respond(c, "<b>Не удалось сохранить столбцы таблицы.</b>", nil)
 		}
-		h.input.Set(c.Sender().ID, stateCampaignKeyword)
-		return respond(c, "<b>✍️ Шаг 4 из 5</b>\nВведите ключевое слово рекламы.", nil)
+		return h.showCampaignKeywordPrompt(c)
 	}
 	parts := strings.SplitN(action, ":", 2)
 	if len(parts) != 2 {
@@ -441,6 +628,8 @@ func (h *Handler) handleCampaignColumnsAction(c tele.Context, data string) error
 		draft.Columns = moveDraftColumn(draft.Columns, column, -1)
 	case "down":
 		draft.Columns = moveDraftColumn(draft.Columns, column, 1)
+	case "remove":
+		draft.Columns = removeDraftColumn(draft.Columns, column)
 	default:
 		return respond(c, "<b>Некорректное действие со столбцами.</b>", nil)
 	}
@@ -450,7 +639,10 @@ func (h *Handler) handleCampaignColumnsAction(c tele.Context, data string) error
 func (h *Handler) handleCampaignKeyword(c tele.Context) error {
 	keyword := c.Text()
 	if strings.TrimSpace(keyword) == "" {
-		return respond(c, "<b>Ключевое слово не может быть пустым.</b>", nil)
+		return respond(c, "<b>Ключевое слово не может быть пустым.</b>", core_telegram_ui.InlineMenu(
+			core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:create:back:columns")),
+			core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
+		))
 	}
 	draft, err := h.loadDraft(c.Sender().ID)
 	if err != nil {
@@ -460,9 +652,22 @@ func (h *Handler) handleCampaignKeyword(c tele.Context) error {
 	if err := h.saveDraft(c.Sender().ID, stateCampaignStartDate, draft); err != nil {
 		return respond(c, "<b>Не удалось сохранить ключевое слово кампании.</b>", nil)
 	}
+	return h.showCampaignStartDatePrompt(c)
+}
+
+func (h *Handler) showCampaignKeywordPrompt(c tele.Context) error {
+	h.input.Set(c.Sender().ID, stateCampaignKeyword)
+	return respond(c, "<b>✍️ Шаг 4 из 5</b>\nВведите ключевое слово рекламы.", core_telegram_ui.InlineMenu(
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:create:back:columns")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
+	))
+}
+
+func (h *Handler) showCampaignStartDatePrompt(c tele.Context) error {
 	h.input.Set(c.Sender().ID, stateCampaignStartDate)
 	menu := core_telegram_ui.InlineMenu(
 		core_telegram_ui.Row(core_telegram_ui.Btn("📅 Сегодняшняя дата", "campaigns:create:start:today")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:create:back:keyword")),
 		core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
 	)
 	return respond(c, "<b>📆 Шаг 5 из 5</b>\nВведите дату старта в одном из форматов:\n<code>ДД-ММ-ГГ</code>, <code>ДД.ММ.ГГГГ</code>, <code>ДД ММ ГГГГ</code>, <code>ДД ММ ГГ</code>, <code>ДД-ММ-ГГГГ</code>.", menu)
@@ -471,7 +676,10 @@ func (h *Handler) handleCampaignKeyword(c tele.Context) error {
 func (h *Handler) handleCampaignStartDate(c tele.Context) error {
 	parsed, err := parseHumanDate(strings.TrimSpace(c.Text()))
 	if err != nil {
-		return respond(c, "<b>Не удалось распознать дату.</b>\nИспользуйте один из форматов: <code>ДД-ММ-ГГ</code>, <code>ДД.ММ.ГГГГ</code>, <code>ДД ММ ГГГГ</code>, <code>ДД ММ ГГ</code>, <code>ДД-ММ-ГГГГ</code>.", nil)
+		return respond(c, "<b>Не удалось распознать дату.</b>\nИспользуйте один из форматов: <code>ДД-ММ-ГГ</code>, <code>ДД.ММ.ГГГГ</code>, <code>ДД ММ ГГГГ</code>, <code>ДД ММ ГГ</code>, <code>ДД-ММ-ГГГГ</code>.", core_telegram_ui.InlineMenu(
+			core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:create:back:keyword")),
+			core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
+		))
 	}
 	return h.finalizeCreateStartDate(c, parsed)
 }
@@ -497,7 +705,9 @@ func (h *Handler) finalizeCreateStartDate(c tele.Context, parsed time.Time) erro
 		return respond(c, "<b>Не удалось сохранить дату старта.</b>", nil)
 	}
 	return respond(c, formatDraftPreview(draft), core_telegram_ui.InlineMenu(
-		core_telegram_ui.Row(core_telegram_ui.Btn("✅ Создать", "campaigns:create:confirm"), core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("✅ Создать", "campaigns:create:confirm")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:create:back:start-date")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("✖️ Отмена", "campaigns:create:cancel")),
 	))
 }
 
@@ -521,13 +731,41 @@ func (h *Handler) cancelCreateCampaign(c tele.Context) error {
 	return respond(c, "<b>✖️ Создание кампании отменено.</b>", core_telegram_ui.InlineMenu(core_telegram_ui.Row(core_telegram_ui.Btn("📣 К кампаниям", "campaigns:menu"))))
 }
 
+func (h *Handler) backToCreateChannels(c tele.Context) error {
+	channels, err := h.client.ListChannels(context.Background(), c.Sender().ID)
+	if err != nil {
+		return respond(c, "<b>Не удалось получить список каналов.</b>", nil)
+	}
+	return h.showCampaignChannelSelection(c, channels)
+}
+
+func (h *Handler) backToCreateTarget(c tele.Context) error {
+	return h.showCampaignTargetSelection(c)
+}
+
+func (h *Handler) backToCreateColumns(c tele.Context) error {
+	draft, err := h.loadDraft(c.Sender().ID)
+	if err != nil {
+		return respond(c, "<b>Не удалось восстановить черновик кампании.</b>", nil)
+	}
+	return h.showCampaignColumnsEditor(c, draft)
+}
+
+func (h *Handler) backToCreateKeyword(c tele.Context) error {
+	return h.showCampaignKeywordPrompt(c)
+}
+
+func (h *Handler) backToCreateStartDate(c tele.Context) error {
+	return h.showCampaignStartDatePrompt(c)
+}
+
 func (h *Handler) showSettingsChannels(c tele.Context) error {
 	channels, err := h.client.ListChannels(context.Background(), c.Sender().ID)
 	if err != nil {
 		return respond(c, "<b>Не удалось получить список каналов.</b>", nil)
 	}
 	rows := make([][]core_telegram_ui.Button, 0, len(channels)+2)
-	rows = append(rows, core_telegram_ui.Row(core_telegram_ui.Btn("🔗 Привязать канал", "settings:channels:add")))
+	rows = append(rows, core_telegram_ui.Row(core_telegram_ui.Btn("✚ Привязать канал", "settings:channels:add")))
 	for _, channel := range channels {
 		rows = append(rows, core_telegram_ui.Row(core_telegram_ui.Btn(channelButtonLabel(channel), "settings:channels:view:"+channel.ChannelID)))
 	}
@@ -563,7 +801,7 @@ func (h *Handler) promptAddChannel(c tele.Context) error {
 		return respond(c, "<b>Не удалось открыть ввод ID канала.</b>", nil)
 	}
 	h.input.Set(c.Sender().ID, stateSettingsAddChannel)
-	return respond(c, "<b>Отправьте ID канала, @handle или ссылку на канал.</b>\nНапример:\n<code>UCoV1F9JNNqripLok4BDLetQ</code>\n<code>@drake_afk</code>\n<code>https://www.youtube.com/channel/UCoV1F9JNNqripLok4BDLetQ/</code>", nil)
+	return respond(c, "<b>Отправьте ID канала, @username канала или ссылку.</b>", nil)
 }
 
 func (h *Handler) handleAddChannelText(c tele.Context) error {
@@ -625,10 +863,11 @@ func (h *Handler) showNotificationSettings(c tele.Context) error {
 	if err != nil {
 		return respond(c, "<b>Не удалось получить настройки уведомлений.</b>", nil)
 	}
-	text := fmt.Sprintf("<b>🔔 Уведомления</b>\nСтатус: <b>%s</b>\nВремя: <code>%s</code>\nТаймзона: <code>%s</code>", html.EscapeString(enabledLabel(settings.NotificationsEnabled)), html.EscapeString(settings.NotificationTime), html.EscapeString(settings.Timezone))
+	text := fmt.Sprintf("<b>🔔 Уведомления</b>\nСтатус: <b>%s</b>\nПериодичность: <b>%s</b>\nВремя: <code>%s</code>\nТаймзона: <code>%s</code>", html.EscapeString(enabledLabel(settings.NotificationsEnabled)), html.EscapeString(formatNotificationIntervalLabel(settings.NotificationIntervalMinutes)), html.EscapeString(settings.NotificationTime), html.EscapeString(settings.Timezone))
 	menu := core_telegram_ui.InlineMenu(
 		core_telegram_ui.Row(core_telegram_ui.Btn(toggleLabel(settings.NotificationsEnabled), "settings:notifications:toggle")),
-		core_telegram_ui.Row(core_telegram_ui.Btn("🕒 Изменить время", "settings:notifications:time"), core_telegram_ui.Btn("🌍 Изменить таймзону", "settings:notifications:timezone")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("⏱️ Изменить период", "settings:notifications:interval"), core_telegram_ui.Btn("🕒 Изменить время", "settings:notifications:time")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("🌍 Изменить таймзону", "settings:notifications:timezone")),
 		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "settings:menu")),
 	)
 	return respond(c, text, menu)
@@ -673,12 +912,29 @@ func (h *Handler) toggleNotifications(c tele.Context) error {
 	return h.showNotificationSettings(c)
 }
 
+func (h *Handler) promptNotificationInterval(c tele.Context) error {
+	if err := h.saveSession(c.Sender().ID, "settings", stateSettingsNotificationInterval, "{}"); err != nil {
+		return respond(c, "<b>Не удалось открыть ввод периодичности.</b>", nil)
+	}
+	h.input.Set(c.Sender().ID, stateSettingsNotificationInterval)
+	menu := core_telegram_ui.InlineMenu(
+		core_telegram_ui.Row(core_telegram_ui.Btn("Каждые 3 часа", "settings:notifications:interval:set:180")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("Каждые 6 часов", "settings:notifications:interval:set:360"), core_telegram_ui.Btn("Каждые 12 часов", "settings:notifications:interval:set:720")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("Раз в день", "settings:notifications:interval:set:1440"), core_telegram_ui.Btn("Раз в 3 дня", "settings:notifications:interval:set:4320")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("Раз в неделю", "settings:notifications:interval:set:10080"), core_telegram_ui.Btn("Пауза на 1 день", "settings:notifications:interval:set:1440")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "settings:notifications")),
+	)
+	return respond(c, "<b>Выберите периодичность уведомлений.</b>\nМинимум: <code>каждые 3 часа</code>\nМаксимум: <code>раз в неделю</code>\nИли отправьте текстом: <code>6h</code>, <code>12ч</code>, <code>3d</code>, <code>7д</code>.", menu)
+}
+
 func (h *Handler) promptNotificationTime(c tele.Context) error {
 	if err := h.saveSession(c.Sender().ID, "settings", stateSettingsNotificationTime, "{}"); err != nil {
 		return respond(c, "<b>Не удалось открыть ввод времени.</b>", nil)
 	}
 	h.input.Set(c.Sender().ID, stateSettingsNotificationTime)
-	return respond(c, "<b>Введите время уведомлений в формате HH:MM.</b>", nil)
+	return respond(c, "<b>Введите время уведомлений в формате HH:MM.</b>\nПо умолчанию: <code>12:00</code>.", core_telegram_ui.InlineMenu(
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "settings:notifications")),
+	))
 }
 
 func (h *Handler) handleNotificationTimeText(c tele.Context) error {
@@ -689,6 +945,36 @@ func (h *Handler) handleNotificationTimeText(c tele.Context) error {
 	settings.NotificationTime = strings.TrimSpace(c.Text())
 	if _, err := h.client.UpdateSettings(context.Background(), settings); err != nil {
 		return respond(c, "<b>Не удалось обновить время уведомлений.</b>", nil)
+	}
+	_ = h.client.DeleteInputSession(context.Background(), c.Sender().ID)
+	h.input.Clear(c.Sender().ID)
+	return h.showNotificationSettings(c)
+}
+
+func (h *Handler) handleNotificationIntervalText(c tele.Context) error {
+	minutes, err := parseNotificationIntervalText(strings.TrimSpace(c.Text()))
+	if err != nil {
+		return respond(c, "<b>Не удалось распознать периодичность.</b>\nИспользуйте значения от <code>3ч</code> до <code>7д</code>.", nil)
+	}
+	return h.applyNotificationInterval(c, minutes)
+}
+
+func (h *Handler) setNotificationIntervalPreset(c tele.Context, data string) error {
+	minutes, err := strconv.Atoi(strings.TrimPrefix(data, "settings:notifications:interval:set:"))
+	if err != nil {
+		return respond(c, "<b>Некорректная периодичность уведомлений.</b>", nil)
+	}
+	return h.applyNotificationInterval(c, minutes)
+}
+
+func (h *Handler) applyNotificationInterval(c tele.Context, minutes int) error {
+	settings, err := h.client.GetSettings(context.Background(), c.Sender().ID)
+	if err != nil {
+		return respond(c, "<b>Не удалось получить текущие настройки.</b>", nil)
+	}
+	settings.NotificationIntervalMinutes = minutes
+	if _, err := h.client.UpdateSettings(context.Background(), settings); err != nil {
+		return respond(c, "<b>Не удалось обновить периодичность уведомлений.</b>", nil)
 	}
 	_ = h.client.DeleteInputSession(context.Background(), c.Sender().ID)
 	h.input.Clear(c.Sender().ID)
@@ -747,6 +1033,22 @@ func (h *Handler) savePendingChannelVerification(userID int64, pending pendingCh
 	return h.saveSession(userID, "settings", stateSettingsConfirmChannel, raw)
 }
 
+func (h *Handler) savePendingCampaignColumnsEdit(userID int64, pending pendingCampaignColumnsEdit) error {
+	raw, err := jsonString(pending)
+	if err != nil {
+		return err
+	}
+	return h.saveSession(userID, flowCampaignCreate, stateCampaignUpdateColumns, raw)
+}
+
+func (h *Handler) savePendingCampaignTargetEdit(userID int64, pending pendingCampaignTargetEdit) error {
+	raw, err := jsonString(pending)
+	if err != nil {
+		return err
+	}
+	return h.saveSession(userID, flowCampaignCreate, stateCampaignUpdateTarget, raw)
+}
+
 func (h *Handler) loadDraft(userID int64) (campaign_service.CreateCampaignDraft, error) {
 	session, err := h.client.GetInputSession(context.Background(), userID)
 	if err != nil {
@@ -763,6 +1065,31 @@ func (h *Handler) loadPendingChannelVerification(userID int64) (pendingChannelVe
 	var pending pendingChannelVerification
 	if err := jsonUnmarshal(session.Payload, &pending); err != nil {
 		return pendingChannelVerification{}, err
+	}
+	return pending, nil
+}
+
+func (h *Handler) loadPendingCampaignColumnsEdit(userID int64) (pendingCampaignColumnsEdit, error) {
+	session, err := h.client.GetInputSession(context.Background(), userID)
+	if err != nil {
+		return pendingCampaignColumnsEdit{}, err
+	}
+	var pending pendingCampaignColumnsEdit
+	if err := jsonUnmarshal(session.Payload, &pending); err != nil {
+		return pendingCampaignColumnsEdit{}, err
+	}
+	pending.Columns = normalizedDraftColumns(pending.Columns)
+	return pending, nil
+}
+
+func (h *Handler) loadPendingCampaignTargetEdit(userID int64) (pendingCampaignTargetEdit, error) {
+	session, err := h.client.GetInputSession(context.Background(), userID)
+	if err != nil {
+		return pendingCampaignTargetEdit{}, err
+	}
+	var pending pendingCampaignTargetEdit
+	if err := jsonUnmarshal(session.Payload, &pending); err != nil {
+		return pendingCampaignTargetEdit{}, err
 	}
 	return pending, nil
 }
@@ -918,6 +1245,68 @@ func parseViews(value string) (int64, error) {
 	return parsed * multiplier, nil
 }
 
+func parseNotificationIntervalText(value string) (int, error) {
+	cleaned := strings.ToLower(strings.TrimSpace(value))
+	cleaned = strings.ReplaceAll(cleaned, " ", "")
+	var multiplier int
+	switch {
+	case strings.HasSuffix(cleaned, "ч"), strings.HasSuffix(cleaned, "h"):
+		multiplier = 60
+		cleaned = strings.TrimSuffix(strings.TrimSuffix(cleaned, "ч"), "h")
+	case strings.HasSuffix(cleaned, "д"), strings.HasSuffix(cleaned, "d"):
+		multiplier = 24 * 60
+		cleaned = strings.TrimSuffix(strings.TrimSuffix(cleaned, "д"), "d")
+	default:
+		return 0, fmt.Errorf("invalid interval")
+	}
+	parsed, err := strconv.Atoi(cleaned)
+	if err != nil {
+		return 0, err
+	}
+	minutes := parsed * multiplier
+	if err := domain.ValidateNotificationIntervalMinutes(minutes); err != nil {
+		return 0, err
+	}
+	return minutes, nil
+}
+
+func formatNotificationIntervalLabel(minutes int) string {
+	minutes = domain.NormalizeNotificationIntervalMinutes(minutes)
+	duration := time.Duration(minutes) * time.Minute
+	if duration == 7*24*time.Hour {
+		return "раз в неделю"
+	}
+	if duration%(24*time.Hour) == 0 {
+		days := int(duration / (24 * time.Hour))
+		if days == 1 {
+			return "раз в день"
+		}
+		return fmt.Sprintf("раз в %s", pluralizeRu(days, "день", "дня", "дней"))
+	}
+	if duration%time.Hour == 0 {
+		hours := int(duration / time.Hour)
+		return fmt.Sprintf("каждые %s", pluralizeRu(hours, "час", "часа", "часов"))
+	}
+	return domain.FormatNotificationInterval(duration)
+}
+
+func pluralizeRu(value int, one string, few string, many string) string {
+	mod100 := value % 100
+	mod10 := value % 10
+	suffix := many
+	switch {
+	case mod100 >= 11 && mod100 <= 14:
+		suffix = many
+	case mod10 == 1:
+		suffix = one
+	case mod10 >= 2 && mod10 <= 4:
+		suffix = few
+	default:
+		suffix = many
+	}
+	return fmt.Sprintf("%d %s", value, suffix)
+}
+
 func statsColumnLabel(column domain.StatsColumn) string {
 	switch column {
 	case domain.StatsColumnID:
@@ -979,6 +1368,24 @@ func toggleDraftColumn(columns []domain.StatsColumn, target domain.StatsColumn) 
 		return result
 	}
 	return append(result, target)
+}
+
+func removeDraftColumn(columns []domain.StatsColumn, target domain.StatsColumn) []domain.StatsColumn {
+	columns = normalizedDraftColumns(columns)
+	if len(columns) <= 1 {
+		return columns
+	}
+	result := make([]domain.StatsColumn, 0, len(columns)-1)
+	for _, column := range columns {
+		if column == target {
+			continue
+		}
+		result = append(result, column)
+	}
+	if len(result) == 0 {
+		return columns
+	}
+	return result
 }
 
 func moveDraftColumn(columns []domain.StatsColumn, target domain.StatsColumn, delta int) []domain.StatsColumn {
@@ -1172,6 +1579,10 @@ func campaignDetailMenu(item campaignapi_client.Campaign, origin campaignListOri
 			rows = append(rows, core_telegram_ui.Row(core_telegram_ui.Btn("📝 Создать таблицу", formatCampaignActionCallback("sheet", item.ID, origin))))
 		}
 	}
+	rows = append(rows, core_telegram_ui.Row(
+		core_telegram_ui.Btn("🧩 Обновить столбцы", formatCampaignActionCallback("update-columns", item.ID, origin)),
+		core_telegram_ui.Btn("🎯 Обновить цель", formatCampaignActionCallback("update-target", item.ID, origin)),
+	))
 	if item.Status != domain.CampaignStatusClosed {
 		rows = append(rows, core_telegram_ui.Row(
 			core_telegram_ui.Btn("🔄 Обновить просмотры", formatCampaignActionCallback("refresh", item.ID, origin)),
@@ -1258,6 +1669,70 @@ func formatChannelVerificationInstructions(pending pendingChannelVerification, u
 		parts = append(parts, "Подтверждение привязано к вашему Telegram ID: <code>"+strconv.FormatInt(userID, 10)+"</code>")
 	}
 	return strings.Join(parts, "\n")
+}
+
+func (h *Handler) showCampaignUpdateColumnsEditor(c tele.Context, pending pendingCampaignColumnsEdit) error {
+	pending.Columns = normalizedDraftColumns(pending.Columns)
+	rows := make([][]core_telegram_ui.Button, 0, len(pending.Columns)+8)
+	for idx, column := range pending.Columns {
+		buttons := []core_telegram_ui.Button{core_telegram_ui.Btn(statsColumnLabel(column), "campaigns:noop")}
+		if idx > 0 {
+			buttons = append(buttons, core_telegram_ui.Btn("⬆️", fmt.Sprintf("campaigns:update-columns-action:up:%s", column)))
+		} else {
+			buttons = append(buttons, core_telegram_ui.Btn(" ", "campaigns:noop"))
+		}
+		if idx < len(pending.Columns)-1 {
+			buttons = append(buttons, core_telegram_ui.Btn("⬇️", fmt.Sprintf("campaigns:update-columns-action:down:%s", column)))
+		} else {
+			buttons = append(buttons, core_telegram_ui.Btn(" ", "campaigns:noop"))
+		}
+		buttons = append(buttons, core_telegram_ui.Btn("✖️", fmt.Sprintf("campaigns:update-columns-action:remove:%s", column)))
+		rows = append(rows, core_telegram_ui.Row(buttons...))
+	}
+	for _, column := range allStatsColumns() {
+		if containsStatsColumn(pending.Columns, column) {
+			continue
+		}
+		rows = append(rows, core_telegram_ui.Row(core_telegram_ui.Btn("➕ "+statsColumnLabel(column), fmt.Sprintf("campaigns:update-columns-action:toggle:%s", column))))
+	}
+	rows = append(rows,
+		core_telegram_ui.Row(core_telegram_ui.Btn("↺ Сбросить по умолчанию", "campaigns:update-columns-action:reset")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("✅ Сохранить", "campaigns:update-columns-action:done")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:update-columns-action:cancel")),
+	)
+	return respond(c, "<b>🧩 Обновить столбцы</b>\nВыберите столбцы для таблицы и настройте их порядок.", core_telegram_ui.InlineMenu(rows...))
+}
+
+func (h *Handler) showCampaignTargetUpdateEditor(c tele.Context, pending pendingCampaignTargetEdit) error {
+	if err := h.savePendingCampaignTargetEdit(c.Sender().ID, pending); err != nil {
+		return respond(c, "<b>Не удалось сохранить редактор цели.</b>", nil)
+	}
+	h.input.Set(c.Sender().ID, stateCampaignUpdateTarget)
+	menu := core_telegram_ui.InlineMenu(
+		core_telegram_ui.Row(core_telegram_ui.Btn("250K", "campaigns:update-target-action:250000"), core_telegram_ui.Btn("500K", "campaigns:update-target-action:500000")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("750K", "campaigns:update-target-action:750000"), core_telegram_ui.Btn("1 МЛН", "campaigns:update-target-action:1000000")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("1.5 МЛН", "campaigns:update-target-action:1500000"), core_telegram_ui.Btn("2 МЛН", "campaigns:update-target-action:2000000")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("3 МЛН", "campaigns:update-target-action:3000000"), core_telegram_ui.Btn("Не задано", "campaigns:update-target-action:none")),
+		core_telegram_ui.Row(core_telegram_ui.Btn("⬅️ Назад", "campaigns:update-target-action:cancel")),
+	)
+	text := "<b>🎯 Обновить цель просмотров</b>\nВыберите цель по просмотрам или отправьте число сообщением."
+	if pending.TargetViews != nil {
+		text += "\nТекущая цель: <b>" + html.EscapeString(domain.FormatViewsTarget(*pending.TargetViews)) + "</b>"
+	} else {
+		text += "\nТекущая цель: <b>не задана</b>"
+	}
+	return respond(c, text, menu)
+}
+
+func (h *Handler) applyCampaignTargetUpdate(c tele.Context, pending pendingCampaignTargetEdit) error {
+	item, err := h.client.UpdateCampaignTarget(context.Background(), c.Sender().ID, pending.CampaignID, pending.TargetViews)
+	if err != nil {
+		return respond(c, "<b>Не удалось обновить цель кампании.</b>", nil)
+	}
+	_ = h.client.DeleteInputSession(context.Background(), c.Sender().ID)
+	h.input.Clear(c.Sender().ID)
+	settings, _ := h.client.GetSettings(context.Background(), c.Sender().ID)
+	return respond(c, "<b>✅ Цель просмотров обновлена.</b>\n\n"+formatCampaign(item), campaignDetailMenu(item, pending.Origin, settings))
 }
 
 func campaignStatusEmoji(value string) string {

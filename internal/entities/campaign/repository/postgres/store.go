@@ -4,112 +4,75 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"getytstatsapi/internal/core/domain"
 	core_errors "getytstatsapi/internal/core/errors"
+	postgres_sqlc "getytstatsapi/internal/core/infra/postgres/sqlc"
 )
 
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	queries *postgres_sqlc.Queries
 }
 
 func NewStore(db *sql.DB) *Store {
-	return &Store{db: db}
+	return &Store{db: db, queries: postgres_sqlc.New(db)}
 }
 
 func (s *Store) AddUserChannel(ctx context.Context, userID int64, channelID string, channelTitle string) (domain.UserChannel, error) {
-	var row domain.UserChannel
-	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO telegram_user_channels (
-			telegram_user_id,
-			channel_id,
-			channel_title,
-			created_at,
-			updated_at
-		) VALUES ($1, $2, $3, NOW(), NOW())
-		RETURNING id, telegram_user_id, channel_id, channel_title, created_at, updated_at
-	`, userID, strings.TrimSpace(channelID), strings.TrimSpace(channelTitle)).Scan(
-		&row.ID,
-		&row.TelegramUserID,
-		&row.ChannelID,
-		&row.ChannelTitle,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
+	row, err := s.queries.AddUserChannel(ctx, postgres_sqlc.AddUserChannelParams{
+		TelegramUserID: userID,
+		ChannelID:      strings.TrimSpace(channelID),
+		ChannelTitle:   strings.TrimSpace(channelTitle),
+	})
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "uq_telegram_user_channel") {
 			return domain.UserChannel{}, fmt.Errorf("%w: channel is already linked", core_errors.ErrConflict)
 		}
 		return domain.UserChannel{}, fmt.Errorf("insert user channel: %w", err)
 	}
-	return row, nil
+	return userChannelFromRow(row), nil
 }
 
 func (s *Store) GetUserChannel(ctx context.Context, userID int64, channelID string) (domain.UserChannel, error) {
-	var row domain.UserChannel
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, telegram_user_id, channel_id, channel_title, created_at, updated_at
-		FROM telegram_user_channels
-		WHERE telegram_user_id = $1 AND channel_id = $2
-	`, userID, strings.TrimSpace(channelID)).Scan(
-		&row.ID,
-		&row.TelegramUserID,
-		&row.ChannelID,
-		&row.ChannelTitle,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
+	row, err := s.queries.GetUserChannel(ctx, postgres_sqlc.GetUserChannelParams{
+		TelegramUserID: userID,
+		ChannelID:      strings.TrimSpace(channelID),
+	})
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return domain.UserChannel{}, fmt.Errorf("%w: channel not found", core_errors.ErrNotFound)
 		}
 		return domain.UserChannel{}, fmt.Errorf("select user channel: %w", err)
 	}
-	return row, nil
+	return userChannelFromRow(row), nil
 }
 
 func (s *Store) ListUserChannels(ctx context.Context, userID int64) ([]domain.UserChannel, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, telegram_user_id, channel_id, channel_title, created_at, updated_at
-		FROM telegram_user_channels
-		WHERE telegram_user_id = $1
-		ORDER BY created_at ASC, id ASC
-	`, userID)
+	rows, err := s.queries.ListUserChannels(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("select user channels: %w", err)
 	}
-	defer rows.Close()
 
-	channels := make([]domain.UserChannel, 0)
-	for rows.Next() {
-		var row domain.UserChannel
-		if err := rows.Scan(&row.ID, &row.TelegramUserID, &row.ChannelID, &row.ChannelTitle, &row.CreatedAt, &row.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan user channel: %w", err)
-		}
-		channels = append(channels, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate user channels: %w", err)
+	channels := make([]domain.UserChannel, 0, len(rows))
+	for _, row := range rows {
+		channels = append(channels, userChannelFromRow(row))
 	}
 
 	return channels, nil
 }
 
 func (s *Store) DeleteUserChannel(ctx context.Context, userID int64, channelID string) error {
-	result, err := s.db.ExecContext(ctx, `
-		DELETE FROM telegram_user_channels
-		WHERE telegram_user_id = $1 AND channel_id = $2
-	`, userID, strings.TrimSpace(channelID))
+	affected, err := s.queries.DeleteUserChannel(ctx, postgres_sqlc.DeleteUserChannelParams{
+		TelegramUserID: userID,
+		ChannelID:      strings.TrimSpace(channelID),
+	})
 	if err != nil {
 		return fmt.Errorf("delete user channel: %w", err)
-	}
-
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete user channel rows affected: %w", err)
 	}
 	if affected == 0 {
 		return fmt.Errorf("%w: channel not found", core_errors.ErrNotFound)
@@ -118,173 +81,63 @@ func (s *Store) DeleteUserChannel(ctx context.Context, userID int64, channelID s
 }
 
 func (s *Store) GetUserSettings(ctx context.Context, userID int64) (domain.UserSettings, error) {
-	var row domain.UserSettings
-	var lastSent sql.NullTime
-	var googleEmail sql.NullString
-	var googleRefreshToken sql.NullString
-	var googleConnectedAt sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		SELECT telegram_user_id, notifications_enabled, notification_time, timezone, google_email, google_refresh_token, google_connected_at, last_notification_sent_at, created_at, updated_at
-		FROM telegram_user_settings
-		WHERE telegram_user_id = $1
-	`, userID).Scan(
-		&row.TelegramUserID,
-		&row.NotificationsEnabled,
-		&row.NotificationTime,
-		&row.Timezone,
-		&googleEmail,
-		&googleRefreshToken,
-		&googleConnectedAt,
-		&lastSent,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
+	row, err := s.queries.GetUserSettings(ctx, userID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return domain.DefaultUserSettings(userID), nil
 		}
 		return domain.UserSettings{}, fmt.Errorf("select user settings: %w", err)
 	}
-	if lastSent.Valid {
-		row.LastNotificationSentAt = &lastSent.Time
-	}
-	if googleEmail.Valid {
-		row.GoogleEmail = googleEmail.String
-	}
-	if googleRefreshToken.Valid {
-		row.GoogleRefreshToken = googleRefreshToken.String
-	}
-	if googleConnectedAt.Valid {
-		row.GoogleConnectedAt = &googleConnectedAt.Time
-	}
-	return row, nil
+	return userSettingsFromRow(row), nil
 }
 
 func (s *Store) UpsertUserSettings(ctx context.Context, settings domain.UserSettings) (domain.UserSettings, error) {
 	if strings.TrimSpace(settings.NotificationTime) == "" {
 		settings.NotificationTime = domain.DefaultNotificationTime
 	}
+	settings.NotificationIntervalMinutes = domain.NormalizeNotificationIntervalMinutes(settings.NotificationIntervalMinutes)
 	if strings.TrimSpace(settings.Timezone) == "" {
 		settings.Timezone = domain.DefaultUserTimezone
 	}
 
-	var row domain.UserSettings
-	var lastSent sql.NullTime
-	var googleEmail sql.NullString
-	var googleRefreshToken sql.NullString
-	var googleConnectedAt sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO telegram_user_settings (
-			telegram_user_id,
-			notifications_enabled,
-			notification_time,
-			timezone,
-			google_email,
-			google_refresh_token,
-			google_connected_at,
-			last_notification_sent_at,
-			created_at,
-			updated_at
-		) VALUES ($1, $2, $3, $4, NULL, NULL, NULL, $5, NOW(), NOW())
-		ON CONFLICT (telegram_user_id) DO UPDATE SET
-			notifications_enabled = EXCLUDED.notifications_enabled,
-			notification_time = EXCLUDED.notification_time,
-			timezone = EXCLUDED.timezone,
-			last_notification_sent_at = COALESCE(EXCLUDED.last_notification_sent_at, telegram_user_settings.last_notification_sent_at),
-			updated_at = NOW()
-		RETURNING telegram_user_id, notifications_enabled, notification_time, timezone, google_email, google_refresh_token, google_connected_at, last_notification_sent_at, created_at, updated_at
-	`, settings.TelegramUserID, settings.NotificationsEnabled, settings.NotificationTime, settings.Timezone, nullableTime(settings.LastNotificationSentAt)).Scan(
-		&row.TelegramUserID,
-		&row.NotificationsEnabled,
-		&row.NotificationTime,
-		&row.Timezone,
-		&googleEmail,
-		&googleRefreshToken,
-		&googleConnectedAt,
-		&lastSent,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
+	row, err := s.queries.UpsertUserSettings(ctx, postgres_sqlc.UpsertUserSettingsParams{
+		TelegramUserID:              settings.TelegramUserID,
+		NotificationsEnabled:        settings.NotificationsEnabled,
+		NotificationTime:            settings.NotificationTime,
+		NotificationIntervalMinutes: int32(settings.NotificationIntervalMinutes),
+		Timezone:                    settings.Timezone,
+		LastNotificationSentAt:      nullableTime(settings.LastNotificationSentAt),
+	})
 	if err != nil {
 		return domain.UserSettings{}, fmt.Errorf("upsert user settings: %w", err)
 	}
-	if lastSent.Valid {
-		row.LastNotificationSentAt = &lastSent.Time
-	}
-	if googleEmail.Valid {
-		row.GoogleEmail = googleEmail.String
-	}
-	if googleRefreshToken.Valid {
-		row.GoogleRefreshToken = googleRefreshToken.String
-	}
-	if googleConnectedAt.Valid {
-		row.GoogleConnectedAt = &googleConnectedAt.Time
-	}
-	return row, nil
+	return userSettingsFromRow(row), nil
 }
 
 func (s *Store) SaveGoogleLink(ctx context.Context, userID int64, email string, refreshToken string, connectedAt time.Time) (domain.UserSettings, error) {
-	var row domain.UserSettings
-	var lastSent sql.NullTime
-	var googleEmail sql.NullString
-	var googleRefreshToken sql.NullString
-	var googleConnected sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO telegram_user_settings (
-			telegram_user_id,
-			notifications_enabled,
-			notification_time,
-			timezone,
-			google_email,
-			google_refresh_token,
-			google_connected_at,
-			created_at,
-			updated_at
-		) VALUES ($1, TRUE, $2, $3, $4, $5, $6, NOW(), NOW())
-		ON CONFLICT (telegram_user_id) DO UPDATE SET
-			google_email = EXCLUDED.google_email,
-			google_refresh_token = EXCLUDED.google_refresh_token,
-			google_connected_at = EXCLUDED.google_connected_at,
-			updated_at = NOW()
-		RETURNING telegram_user_id, notifications_enabled, notification_time, timezone, google_email, google_refresh_token, google_connected_at, last_notification_sent_at, created_at, updated_at
-	`, userID, domain.DefaultNotificationTime, domain.DefaultUserTimezone, strings.TrimSpace(email), strings.TrimSpace(refreshToken), connectedAt.UTC()).Scan(
-		&row.TelegramUserID,
-		&row.NotificationsEnabled,
-		&row.NotificationTime,
-		&row.Timezone,
-		&googleEmail,
-		&googleRefreshToken,
-		&googleConnected,
-		&lastSent,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
+	row, err := s.queries.SaveGoogleLink(ctx, postgres_sqlc.SaveGoogleLinkParams{
+		TelegramUserID:              userID,
+		NotificationTime:            domain.DefaultNotificationTime,
+		NotificationIntervalMinutes: int32(domain.DefaultNotificationInterval / time.Minute),
+		Timezone:                    domain.DefaultUserTimezone,
+		GoogleEmail:                 nullableString(strings.TrimSpace(email)),
+		GoogleRefreshToken:          nullableString(strings.TrimSpace(refreshToken)),
+		GoogleConnectedAt:           nullableTime(&connectedAt),
+	})
 	if err != nil {
 		return domain.UserSettings{}, fmt.Errorf("save google link: %w", err)
 	}
-	if googleEmail.Valid {
-		row.GoogleEmail = googleEmail.String
-	}
-	if googleRefreshToken.Valid {
-		row.GoogleRefreshToken = googleRefreshToken.String
-	}
-	if googleConnected.Valid {
-		row.GoogleConnectedAt = &googleConnected.Time
-	}
-	if lastSent.Valid {
-		row.LastNotificationSentAt = &lastSent.Time
-	}
-	return row, nil
+	return userSettingsFromRow(row), nil
 }
 
 func (s *Store) MarkNotificationSent(ctx context.Context, userID int64, sentAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO telegram_user_settings (telegram_user_id, notifications_enabled, notification_time, timezone, last_notification_sent_at, created_at, updated_at)
-		VALUES ($1, TRUE, $2, $3, $4, NOW(), NOW())
-		ON CONFLICT (telegram_user_id) DO UPDATE SET
-			last_notification_sent_at = EXCLUDED.last_notification_sent_at,
-			updated_at = NOW()
-	`, userID, domain.DefaultNotificationTime, domain.DefaultUserTimezone, sentAt.UTC())
+	err := s.queries.MarkNotificationSent(ctx, postgres_sqlc.MarkNotificationSentParams{
+		TelegramUserID:              userID,
+		NotificationTime:            domain.DefaultNotificationTime,
+		NotificationIntervalMinutes: int32(domain.DefaultNotificationInterval / time.Minute),
+		Timezone:                    domain.DefaultUserTimezone,
+		LastNotificationSentAt:      nullableTime(&sentAt),
+	})
 	if err != nil {
 		return fmt.Errorf("mark notification sent: %w", err)
 	}
@@ -292,104 +145,45 @@ func (s *Store) MarkNotificationSent(ctx context.Context, userID int64, sentAt t
 }
 
 func (s *Store) ListNotificationUsers(ctx context.Context) ([]domain.UserSettings, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT users.telegram_user_id,
-			COALESCE(settings.notifications_enabled, TRUE) AS notifications_enabled,
-			COALESCE(settings.notification_time, $1) AS notification_time,
-			COALESCE(settings.timezone, $2) AS timezone,
-			settings.last_notification_sent_at,
-			COALESCE(settings.created_at, NOW()) AS created_at,
-			COALESCE(settings.updated_at, NOW()) AS updated_at
-		FROM (
-			SELECT telegram_user_id FROM telegram_user_settings
-			UNION
-			SELECT DISTINCT telegram_user_id FROM ad_campaigns WHERE closed_at IS NULL
-		) AS users
-		LEFT JOIN telegram_user_settings AS settings ON settings.telegram_user_id = users.telegram_user_id
-		WHERE COALESCE(settings.notifications_enabled, TRUE) = TRUE
-		ORDER BY users.telegram_user_id ASC
-	`, domain.DefaultNotificationTime, domain.DefaultUserTimezone)
+	rows, err := s.queries.ListNotificationUsers(ctx, postgres_sqlc.ListNotificationUsersParams{
+		NotificationTime:            domain.DefaultNotificationTime,
+		NotificationIntervalMinutes: int32(domain.DefaultNotificationInterval / time.Minute),
+		Timezone:                    domain.DefaultUserTimezone,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("select notification users: %w", err)
 	}
-	defer rows.Close()
 
-	result := make([]domain.UserSettings, 0)
-	for rows.Next() {
-		var row domain.UserSettings
-		var lastSent sql.NullTime
-		if err := rows.Scan(&row.TelegramUserID, &row.NotificationsEnabled, &row.NotificationTime, &row.Timezone, &lastSent, &row.CreatedAt, &row.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan notification user: %w", err)
-		}
-		if lastSent.Valid {
-			row.LastNotificationSentAt = &lastSent.Time
-		}
-		result = append(result, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate notification users: %w", err)
+	result := make([]domain.UserSettings, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, notificationUserFromRow(row))
 	}
 	return result, nil
 }
 
 func (s *Store) CreateCampaign(ctx context.Context, campaign domain.Campaign) (domain.Campaign, error) {
-	var row domain.Campaign
-	var targetViews sql.NullInt64
-	var closedAt sql.NullTime
-	var closeReason sql.NullString
-	var lastSnapshotAt sql.NullTime
-	var lastDailyGrowth sql.NullInt64
-	var estimatedCloseDate sql.NullTime
-	var spreadsheetID sql.NullString
-	var spreadsheetURL sql.NullString
 	columnsPayload, err := json.Marshal(domain.NormalizeStatsColumns(campaign.Columns))
 	if err != nil {
 		return domain.Campaign{}, fmt.Errorf("marshal campaign columns: %w", err)
 	}
-	if campaign.TargetViews != nil {
-		targetViews = sql.NullInt64{Int64: *campaign.TargetViews, Valid: true}
+	if _, err := s.getCampaignByChannelIdentity(ctx, campaign.ChannelID, campaign.Keyword, campaign.StartDate); err == nil {
+		return domain.Campaign{}, fmt.Errorf("%w: campaign already exists", core_errors.ErrConflict)
+	} else if err != nil && !errors.Is(err, core_errors.ErrNotFound) {
+		return domain.Campaign{}, err
 	}
 
-	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO ad_campaigns (
-			telegram_user_id,
-			channel_id,
-			channel_title,
-			keyword,
-			start_date,
-			timezone,
-			target_views,
-			columns,
-			status,
-			export_jwt,
-			created_at,
-			updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, NOW(), NOW())
-		RETURNING id, telegram_user_id, channel_id, channel_title, keyword, start_date, timezone, target_views, columns, status, export_jwt,
-			closed_at, close_reason, last_snapshot_at, last_total_views, last_daily_growth, estimated_close_date, spreadsheet_id, spreadsheet_url, created_at, updated_at
-	`, campaign.TelegramUserID, campaign.ChannelID, campaign.ChannelTitle, campaign.Keyword, campaign.StartDate.UTC(), campaign.Timezone, targetViews, string(columnsPayload), campaign.Status, campaign.ExportJWT).Scan(
-		&row.ID,
-		&row.TelegramUserID,
-		&row.ChannelID,
-		&row.ChannelTitle,
-		&row.Keyword,
-		&row.StartDate,
-		&row.Timezone,
-		&targetViews,
-		&columnsPayload,
-		&row.Status,
-		&row.ExportJWT,
-		&closedAt,
-		&closeReason,
-		&lastSnapshotAt,
-		&row.LastTotalViews,
-		&lastDailyGrowth,
-		&estimatedCloseDate,
-		&spreadsheetID,
-		&spreadsheetURL,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
+	row, err := s.queries.CreateCampaign(ctx, postgres_sqlc.CreateCampaignParams{
+		TelegramUserID: campaign.TelegramUserID,
+		ChannelID:      campaign.ChannelID,
+		ChannelTitle:   campaign.ChannelTitle,
+		Keyword:        campaign.Keyword,
+		StartDate:      campaign.StartDate.UTC(),
+		Timezone:       campaign.Timezone,
+		TargetViews:    nullableInt64(campaign.TargetViews),
+		Column8:        columnsPayload,
+		Status:         campaign.Status,
+		ExportJwt:      campaign.ExportJWT,
+	})
 	if err != nil {
 		message := strings.ToLower(err.Error())
 		if strings.Contains(message, "uq_ad_campaign_identity") {
@@ -400,77 +194,71 @@ func (s *Store) CreateCampaign(ctx context.Context, campaign domain.Campaign) (d
 		}
 		return domain.Campaign{}, fmt.Errorf("insert campaign: %w", err)
 	}
-	if targetViews.Valid {
-		row.TargetViews = &targetViews.Int64
-	}
-	row.Columns = parseCampaignColumns(columnsPayload)
-	if closedAt.Valid {
-		row.ClosedAt = &closedAt.Time
-	}
-	if closeReason.Valid {
-		row.CloseReason = closeReason.String
-	}
-	if lastSnapshotAt.Valid {
-		row.LastSnapshotAt = &lastSnapshotAt.Time
-	}
-	if lastDailyGrowth.Valid {
-		row.LastDailyGrowth = &lastDailyGrowth.Int64
-	}
-	if estimatedCloseDate.Valid {
-		row.EstimatedCloseDate = &estimatedCloseDate.Time
-	}
-	if spreadsheetID.Valid {
-		row.SpreadsheetID = spreadsheetID.String
-	}
-	if spreadsheetURL.Valid {
-		row.SpreadsheetURL = spreadsheetURL.String
-	}
-	return row, nil
+	return campaignFromRow(row), nil
 }
 
 func (s *Store) GetCampaignByID(ctx context.Context, campaignID int64) (domain.Campaign, error) {
-	return s.getCampaign(ctx, `SELECT id, telegram_user_id, channel_id, channel_title, keyword, start_date, timezone, target_views, columns, status, export_jwt,
-		closed_at, close_reason, last_snapshot_at, last_total_views, last_daily_growth, estimated_close_date, spreadsheet_id, spreadsheet_url, created_at, updated_at
-		FROM ad_campaigns WHERE id = $1`, campaignID)
+	row, err := s.queries.GetCampaignByID(ctx, campaignID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return domain.Campaign{}, fmt.Errorf("%w: campaign not found", core_errors.ErrNotFound)
+		}
+		return domain.Campaign{}, fmt.Errorf("select campaign: %w", err)
+	}
+	return campaignFromRow(row), nil
 }
 
 func (s *Store) GetCampaignByIDForUser(ctx context.Context, campaignID int64, userID int64) (domain.Campaign, error) {
-	return s.getCampaign(ctx, `SELECT id, telegram_user_id, channel_id, channel_title, keyword, start_date, timezone, target_views, columns, status, export_jwt,
-		closed_at, close_reason, last_snapshot_at, last_total_views, last_daily_growth, estimated_close_date, spreadsheet_id, spreadsheet_url, created_at, updated_at
-		FROM ad_campaigns WHERE id = $1 AND telegram_user_id = $2`, campaignID, userID)
+	row, err := s.queries.GetCampaignByIDForUser(ctx, postgres_sqlc.GetCampaignByIDForUserParams{
+		ID:             campaignID,
+		TelegramUserID: userID,
+	})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return domain.Campaign{}, fmt.Errorf("%w: campaign not found", core_errors.ErrNotFound)
+		}
+		return domain.Campaign{}, fmt.Errorf("select campaign: %w", err)
+	}
+	return campaignFromRow(row), nil
 }
 
 func (s *Store) GetCampaignByExportJWT(ctx context.Context, token string) (domain.Campaign, error) {
-	return s.getCampaign(ctx, `SELECT id, telegram_user_id, channel_id, channel_title, keyword, start_date, timezone, target_views, columns, status, export_jwt,
-		closed_at, close_reason, last_snapshot_at, last_total_views, last_daily_growth, estimated_close_date, spreadsheet_id, spreadsheet_url, created_at, updated_at
-		FROM ad_campaigns WHERE export_jwt = $1`, token)
+	row, err := s.queries.GetCampaignByExportJWT(ctx, token)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return domain.Campaign{}, fmt.Errorf("%w: campaign not found", core_errors.ErrNotFound)
+		}
+		return domain.Campaign{}, fmt.Errorf("select campaign: %w", err)
+	}
+	return campaignFromRow(row), nil
 }
 
 func (s *Store) ListUserCampaigns(ctx context.Context, userID int64) ([]domain.Campaign, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, telegram_user_id, channel_id, channel_title, keyword, start_date, timezone, target_views, columns, status, export_jwt,
-			closed_at, close_reason, last_snapshot_at, last_total_views, last_daily_growth, estimated_close_date, spreadsheet_id, spreadsheet_url, created_at, updated_at
-		FROM ad_campaigns
-		WHERE telegram_user_id = $1
-		ORDER BY created_at DESC, id DESC
-	`, userID)
+	rows, err := s.queries.ListUserCampaigns(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("select user campaigns: %w", err)
 	}
-	defer rows.Close()
 
-	items := make([]domain.Campaign, 0)
-	for rows.Next() {
-		item, err := scanCampaign(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate user campaigns: %w", err)
+	items := make([]domain.Campaign, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, campaignFromRow(row))
 	}
 	return items, nil
+}
+
+func (s *Store) getCampaignByChannelIdentity(ctx context.Context, channelID string, keyword string, startDate time.Time) (domain.Campaign, error) {
+	row, err := s.queries.GetCampaignByChannelIdentity(ctx, postgres_sqlc.GetCampaignByChannelIdentityParams{
+		ChannelID: strings.TrimSpace(channelID),
+		Keyword:   strings.TrimSpace(keyword),
+		StartDate: time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return domain.Campaign{}, fmt.Errorf("%w: campaign not found", core_errors.ErrNotFound)
+		}
+		return domain.Campaign{}, fmt.Errorf("select campaign: %w", err)
+	}
+	return campaignFromRow(row), nil
 }
 
 func (s *Store) SaveCampaignSnapshot(ctx context.Context, campaign domain.Campaign, snapshot domain.CampaignSnapshot) (domain.CampaignSnapshot, error) {
@@ -479,55 +267,47 @@ func (s *Store) SaveCampaignSnapshot(ctx context.Context, campaign domain.Campai
 		return domain.CampaignSnapshot{}, fmt.Errorf("begin snapshot tx: %w", err)
 	}
 
-	var snapshotID int64
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO ad_campaign_snapshots (
-			campaign_id,
-			snapshot_at,
-			total_views,
-			remaining_views,
-			daily_growth,
-			estimated_close_date,
-			created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, NOW())
-		RETURNING id
-	`, campaign.ID, snapshot.SnapshotAt.UTC(), snapshot.TotalViews, nullableInt64(snapshot.RemainingViews), nullableInt64(snapshot.DailyGrowth), nullableDate(snapshot.EstimatedCloseDate)).Scan(&snapshotID)
+	queries := s.queries.WithTx(tx)
+	snapshotID, err := queries.CreateCampaignSnapshot(ctx, postgres_sqlc.CreateCampaignSnapshotParams{
+		CampaignID:         campaign.ID,
+		SnapshotAt:         snapshot.SnapshotAt.UTC(),
+		TotalViews:         snapshot.TotalViews,
+		RemainingViews:     nullableInt64(snapshot.RemainingViews),
+		DailyGrowth:        nullableInt64(snapshot.DailyGrowth),
+		EstimatedCloseDate: nullableDate(snapshot.EstimatedCloseDate),
+	})
 	if err != nil {
 		_ = tx.Rollback()
 		return domain.CampaignSnapshot{}, fmt.Errorf("insert campaign snapshot: %w", err)
 	}
 
 	for idx, video := range snapshot.Videos {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO ad_campaign_snapshot_videos (
-				snapshot_id,
-				position,
-				video_id,
-				name,
-				publish_date,
-				views,
-				url,
-				views_updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		`, snapshotID, idx, video.VideoID, video.Name, video.PublishDate.UTC(), int64(video.Views), video.URL, video.ViewsUpdatedAt.UTC())
+		err := queries.CreateCampaignSnapshotVideo(ctx, postgres_sqlc.CreateCampaignSnapshotVideoParams{
+			SnapshotID:     snapshotID,
+			Position:       int32(idx),
+			VideoID:        video.VideoID,
+			Name:           video.Name,
+			PublishDate:    video.PublishDate.UTC(),
+			Views:          int64(video.Views),
+			Url:            video.URL,
+			ViewsUpdatedAt: video.ViewsUpdatedAt.UTC(),
+		})
 		if err != nil {
 			_ = tx.Rollback()
 			return domain.CampaignSnapshot{}, fmt.Errorf("insert snapshot video: %w", err)
 		}
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		UPDATE ad_campaigns
-		SET status = $2,
-			closed_at = $3,
-			close_reason = $4,
-			last_snapshot_at = $5,
-			last_total_views = $6,
-			last_daily_growth = $7,
-			estimated_close_date = $8,
-			updated_at = NOW()
-		WHERE id = $1
-	`, campaign.ID, campaign.Status, nullableTime(campaign.ClosedAt), nullableString(campaign.CloseReason), snapshot.SnapshotAt.UTC(), snapshot.TotalViews, nullableInt64(snapshot.DailyGrowth), nullableDate(snapshot.EstimatedCloseDate))
+	err = queries.UpdateCampaignAfterSnapshot(ctx, postgres_sqlc.UpdateCampaignAfterSnapshotParams{
+		ID:                 campaign.ID,
+		Status:             campaign.Status,
+		ClosedAt:           nullableTime(campaign.ClosedAt),
+		CloseReason:        nullableString(campaign.CloseReason),
+		LastSnapshotAt:     nullableTime(&snapshot.SnapshotAt),
+		LastTotalViews:     snapshot.TotalViews,
+		LastDailyGrowth:    nullableInt64(snapshot.DailyGrowth),
+		EstimatedCloseDate: nullableDate(snapshot.EstimatedCloseDate),
+	})
 	if err != nil {
 		_ = tx.Rollback()
 		return domain.CampaignSnapshot{}, fmt.Errorf("update campaign after snapshot: %w", err)
@@ -542,20 +322,14 @@ func (s *Store) SaveCampaignSnapshot(ctx context.Context, campaign domain.Campai
 }
 
 func (s *Store) CloseCampaign(ctx context.Context, campaignID int64, closedAt time.Time, reason string) error {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE ad_campaigns
-		SET status = $2,
-			closed_at = $3,
-			close_reason = $4,
-			updated_at = NOW()
-		WHERE id = $1 AND closed_at IS NULL
-	`, campaignID, domain.CampaignStatusClosed, closedAt.UTC(), strings.TrimSpace(reason))
+	affected, err := s.queries.CloseCampaign(ctx, postgres_sqlc.CloseCampaignParams{
+		ID:          campaignID,
+		Status:      domain.CampaignStatusClosed,
+		ClosedAt:    nullableTime(&closedAt),
+		CloseReason: nullableString(strings.TrimSpace(reason)),
+	})
 	if err != nil {
 		return fmt.Errorf("close campaign: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("close campaign rows affected: %w", err)
 	}
 	if affected == 0 {
 		return fmt.Errorf("%w: campaign not found or already closed", core_errors.ErrNotFound)
@@ -563,14 +337,42 @@ func (s *Store) CloseCampaign(ctx context.Context, campaignID int64, closedAt ti
 	return nil
 }
 
+func (s *Store) UpdateCampaignColumns(ctx context.Context, campaignID int64, columns []domain.StatsColumn) error {
+	payload, err := json.Marshal(domain.NormalizeStatsColumns(columns))
+	if err != nil {
+		return fmt.Errorf("marshal campaign columns: %w", err)
+	}
+	err = s.queries.UpdateCampaignColumns(ctx, postgres_sqlc.UpdateCampaignColumnsParams{
+		ID:      campaignID,
+		Column2: payload,
+	})
+	if err != nil {
+		return fmt.Errorf("update campaign columns: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateCampaignTarget(ctx context.Context, campaignID int64, targetViews *int64, status string, closedAt *time.Time, closeReason string, estimatedCloseDate *time.Time) error {
+	err := s.queries.UpdateCampaignTarget(ctx, postgres_sqlc.UpdateCampaignTargetParams{
+		ID:                 campaignID,
+		TargetViews:        nullableInt64(targetViews),
+		Status:             strings.TrimSpace(status),
+		ClosedAt:           nullableTime(closedAt),
+		CloseReason:        nullableString(closeReason),
+		EstimatedCloseDate: nullableDate(estimatedCloseDate),
+	})
+	if err != nil {
+		return fmt.Errorf("update campaign target: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) UpdateCampaignSpreadsheet(ctx context.Context, campaignID int64, spreadsheetID string, spreadsheetURL string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE ad_campaigns
-		SET spreadsheet_id = $2,
-			spreadsheet_url = $3,
-			updated_at = NOW()
-		WHERE id = $1
-	`, campaignID, nullableString(spreadsheetID), nullableString(spreadsheetURL))
+	err := s.queries.UpdateCampaignSpreadsheet(ctx, postgres_sqlc.UpdateCampaignSpreadsheetParams{
+		ID:             campaignID,
+		SpreadsheetID:  nullableString(spreadsheetID),
+		SpreadsheetUrl: nullableString(spreadsheetURL),
+	})
 	if err != nil {
 		return fmt.Errorf("update campaign spreadsheet: %w", err)
 	}
@@ -578,33 +380,14 @@ func (s *Store) UpdateCampaignSpreadsheet(ctx context.Context, campaignID int64,
 }
 
 func (s *Store) GetLatestSnapshot(ctx context.Context, campaignID int64) (domain.CampaignSnapshot, error) {
-	var row domain.CampaignSnapshot
-	var remaining sql.NullInt64
-	var dailyGrowth sql.NullInt64
-	var estimated sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, campaign_id, snapshot_at, total_views, remaining_views, daily_growth, estimated_close_date, created_at
-		FROM ad_campaign_snapshots
-		WHERE campaign_id = $1
-		ORDER BY snapshot_at DESC, id DESC
-		LIMIT 1
-	`, campaignID).Scan(&row.ID, &row.CampaignID, &row.SnapshotAt, &row.TotalViews, &remaining, &dailyGrowth, &estimated, &row.CreatedAt)
+	row, err := s.queries.GetLatestSnapshot(ctx, campaignID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return domain.CampaignSnapshot{}, fmt.Errorf("%w: snapshot not found", core_errors.ErrNotFound)
 		}
 		return domain.CampaignSnapshot{}, fmt.Errorf("select latest snapshot: %w", err)
 	}
-	if remaining.Valid {
-		row.RemainingViews = &remaining.Int64
-	}
-	if dailyGrowth.Valid {
-		row.DailyGrowth = &dailyGrowth.Int64
-	}
-	if estimated.Valid {
-		row.EstimatedCloseDate = &estimated.Time
-	}
-	return row, nil
+	return snapshotFromRow(row), nil
 }
 
 func (s *Store) GetLatestSnapshotWithVideos(ctx context.Context, campaignID int64) (domain.CampaignSnapshot, error) {
@@ -613,84 +396,49 @@ func (s *Store) GetLatestSnapshotWithVideos(ctx context.Context, campaignID int6
 		return domain.CampaignSnapshot{}, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT video_id, name, publish_date, views, url, views_updated_at
-		FROM ad_campaign_snapshot_videos
-		WHERE snapshot_id = $1
-		ORDER BY position ASC
-	`, snapshot.ID)
+	rows, err := s.queries.ListCampaignSnapshotVideos(ctx, snapshot.ID)
 	if err != nil {
 		return domain.CampaignSnapshot{}, fmt.Errorf("select snapshot videos: %w", err)
 	}
-	defer rows.Close()
 
-	videos := make([]domain.StatsVideo, 0)
-	for rows.Next() {
+	videos := make([]domain.StatsVideo, 0, len(rows))
+	for _, row := range rows {
 		var video domain.StatsVideo
-		var views int64
-		if err := rows.Scan(&video.VideoID, &video.Name, &video.PublishDate, &views, &video.URL, &video.ViewsUpdatedAt); err != nil {
-			return domain.CampaignSnapshot{}, fmt.Errorf("scan snapshot video: %w", err)
-		}
-		video.Views = uint64(views)
+		video.VideoID = row.VideoID
+		video.Name = row.Name
+		video.PublishDate = row.PublishDate
+		video.Views = uint64(row.Views)
+		video.URL = row.Url
+		video.ViewsUpdatedAt = row.ViewsUpdatedAt
 		videos = append(videos, video)
-	}
-	if err := rows.Err(); err != nil {
-		return domain.CampaignSnapshot{}, fmt.Errorf("iterate snapshot videos: %w", err)
 	}
 	snapshot.Videos = videos
 	return snapshot, nil
 }
 
 func (s *Store) GetPreviousSnapshot(ctx context.Context, campaignID int64, before time.Time) (domain.CampaignSnapshot, error) {
-	var row domain.CampaignSnapshot
-	var remaining sql.NullInt64
-	var dailyGrowth sql.NullInt64
-	var estimated sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, campaign_id, snapshot_at, total_views, remaining_views, daily_growth, estimated_close_date, created_at
-		FROM ad_campaign_snapshots
-		WHERE campaign_id = $1 AND snapshot_at < $2
-		ORDER BY snapshot_at DESC, id DESC
-		LIMIT 1
-	`, campaignID, before.UTC()).Scan(&row.ID, &row.CampaignID, &row.SnapshotAt, &row.TotalViews, &remaining, &dailyGrowth, &estimated, &row.CreatedAt)
+	row, err := s.queries.GetPreviousSnapshot(ctx, postgres_sqlc.GetPreviousSnapshotParams{
+		CampaignID: campaignID,
+		SnapshotAt: before.UTC(),
+	})
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return domain.CampaignSnapshot{}, fmt.Errorf("%w: snapshot not found", core_errors.ErrNotFound)
 		}
 		return domain.CampaignSnapshot{}, fmt.Errorf("select previous snapshot: %w", err)
 	}
-	if remaining.Valid {
-		row.RemainingViews = &remaining.Int64
-	}
-	if dailyGrowth.Valid {
-		row.DailyGrowth = &dailyGrowth.Int64
-	}
-	if estimated.Valid {
-		row.EstimatedCloseDate = &estimated.Time
-	}
-	return row, nil
+	return snapshotFromRow(row), nil
 }
 
 func (s *Store) GetInputSession(ctx context.Context, userID int64) (domain.CampaignInputSession, error) {
-	var row domain.CampaignInputSession
-	var payload []byte
-	var expires sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		SELECT telegram_user_id, flow, step, payload, expires_at, created_at, updated_at
-		FROM telegram_input_sessions
-		WHERE telegram_user_id = $1
-	`, userID).Scan(&row.TelegramUserID, &row.Flow, &row.Step, &payload, &expires, &row.CreatedAt, &row.UpdatedAt)
+	row, err := s.queries.GetInputSession(ctx, userID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return domain.CampaignInputSession{}, fmt.Errorf("%w: input session not found", core_errors.ErrNotFound)
 		}
 		return domain.CampaignInputSession{}, fmt.Errorf("select input session: %w", err)
 	}
-	row.Payload = string(payload)
-	if expires.Valid {
-		row.ExpiresAt = &expires.Time
-	}
-	return row, nil
+	return inputSessionFromRow(row), nil
 }
 
 func (s *Store) UpsertInputSession(ctx context.Context, session domain.CampaignInputSession) (domain.CampaignInputSession, error) {
@@ -702,47 +450,21 @@ func (s *Store) UpsertInputSession(ctx context.Context, session domain.CampaignI
 		return domain.CampaignInputSession{}, fmt.Errorf("%w: input session payload must be valid json", core_errors.ErrInvalidArgument)
 	}
 
-	var row domain.CampaignInputSession
-	var stored []byte
-	var expires sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO telegram_input_sessions (
-			telegram_user_id,
-			flow,
-			step,
-			payload,
-			expires_at,
-			created_at,
-			updated_at
-		) VALUES ($1, $2, $3, $4::jsonb, $5, NOW(), NOW())
-		ON CONFLICT (telegram_user_id) DO UPDATE SET
-			flow = EXCLUDED.flow,
-			step = EXCLUDED.step,
-			payload = EXCLUDED.payload,
-			expires_at = EXCLUDED.expires_at,
-			updated_at = NOW()
-		RETURNING telegram_user_id, flow, step, payload, expires_at, created_at, updated_at
-	`, session.TelegramUserID, session.Flow, session.Step, payload, nullableTime(session.ExpiresAt)).Scan(
-		&row.TelegramUserID,
-		&row.Flow,
-		&row.Step,
-		&stored,
-		&expires,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
+	row, err := s.queries.UpsertInputSession(ctx, postgres_sqlc.UpsertInputSessionParams{
+		TelegramUserID: session.TelegramUserID,
+		Flow:           session.Flow,
+		Step:           session.Step,
+		Column4:        []byte(payload),
+		ExpiresAt:      nullableTime(session.ExpiresAt),
+	})
 	if err != nil {
 		return domain.CampaignInputSession{}, fmt.Errorf("upsert input session: %w", err)
 	}
-	row.Payload = string(stored)
-	if expires.Valid {
-		row.ExpiresAt = &expires.Time
-	}
-	return row, nil
+	return inputSessionFromRow(row), nil
 }
 
 func (s *Store) DeleteInputSession(ctx context.Context, userID int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM telegram_input_sessions WHERE telegram_user_id = $1`, userID)
+	err := s.queries.DeleteInputSession(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("delete input session: %w", err)
 	}
@@ -750,16 +472,12 @@ func (s *Store) DeleteInputSession(ctx context.Context, userID int64) error {
 }
 
 func (s *Store) CreatePublicSession(ctx context.Context, session domain.PublicUserSession) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO public_user_sessions (
-			id,
-			telegram_user_id,
-			refresh_token_hash,
-			expires_at,
-			created_at,
-			updated_at
-		) VALUES ($1, $2, $3, $4, NOW(), NOW())
-	`, session.ID, session.TelegramUserID, session.RefreshTokenHash, session.ExpiresAt.UTC())
+	err := s.queries.CreatePublicSession(ctx, postgres_sqlc.CreatePublicSessionParams{
+		ID:               session.ID,
+		TelegramUserID:   session.TelegramUserID,
+		RefreshTokenHash: session.RefreshTokenHash,
+		ExpiresAt:        session.ExpiresAt.UTC(),
+	})
 	if err != nil {
 		return fmt.Errorf("insert public session: %w", err)
 	}
@@ -767,34 +485,22 @@ func (s *Store) CreatePublicSession(ctx context.Context, session domain.PublicUs
 }
 
 func (s *Store) GetPublicSession(ctx context.Context, sessionID string) (domain.PublicUserSession, error) {
-	var row domain.PublicUserSession
-	var revoked sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, telegram_user_id, refresh_token_hash, expires_at, revoked_at, created_at, updated_at
-		FROM public_user_sessions
-		WHERE id = $1
-	`, strings.TrimSpace(sessionID)).Scan(&row.ID, &row.TelegramUserID, &row.RefreshTokenHash, &row.ExpiresAt, &revoked, &row.CreatedAt, &row.UpdatedAt)
+	row, err := s.queries.GetPublicSession(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return domain.PublicUserSession{}, fmt.Errorf("%w: public session not found", core_errors.ErrNotFound)
 		}
 		return domain.PublicUserSession{}, fmt.Errorf("select public session: %w", err)
 	}
-	if revoked.Valid {
-		row.RevokedAt = &revoked.Time
-	}
-	return row, nil
+	return publicSessionFromRow(row), nil
 }
 
 func (s *Store) UpdatePublicSession(ctx context.Context, sessionID string, refreshTokenHash string, expiresAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE public_user_sessions
-		SET refresh_token_hash = $2,
-			expires_at = $3,
-			revoked_at = NULL,
-			updated_at = NOW()
-		WHERE id = $1
-	`, strings.TrimSpace(sessionID), refreshTokenHash, expiresAt.UTC())
+	err := s.queries.UpdatePublicSession(ctx, postgres_sqlc.UpdatePublicSessionParams{
+		ID:               strings.TrimSpace(sessionID),
+		RefreshTokenHash: refreshTokenHash,
+		ExpiresAt:        expiresAt.UTC(),
+	})
 	if err != nil {
 		return fmt.Errorf("update public session: %w", err)
 	}
@@ -802,101 +508,11 @@ func (s *Store) UpdatePublicSession(ctx context.Context, sessionID string, refre
 }
 
 func (s *Store) RevokePublicSession(ctx context.Context, sessionID string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE public_user_sessions
-		SET revoked_at = NOW(), updated_at = NOW()
-		WHERE id = $1
-	`, strings.TrimSpace(sessionID))
+	err := s.queries.RevokePublicSession(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
 		return fmt.Errorf("revoke public session: %w", err)
 	}
 	return nil
-}
-
-func (s *Store) getCampaign(ctx context.Context, query string, args ...any) (domain.Campaign, error) {
-	row, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return domain.Campaign{}, fmt.Errorf("query campaign: %w", err)
-	}
-	defer row.Close()
-	if !row.Next() {
-		if err := row.Err(); err != nil {
-			return domain.Campaign{}, fmt.Errorf("iterate campaign row: %w", err)
-		}
-		return domain.Campaign{}, fmt.Errorf("%w: campaign not found", core_errors.ErrNotFound)
-	}
-	return scanCampaign(row)
-}
-
-type campaignScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanCampaign(scanner campaignScanner) (domain.Campaign, error) {
-	var row domain.Campaign
-	var targetViews sql.NullInt64
-	var columnsPayload []byte
-	var closedAt sql.NullTime
-	var lastSnapshotAt sql.NullTime
-	var lastDailyGrowth sql.NullInt64
-	var estimatedCloseDate sql.NullTime
-	var closeReason sql.NullString
-	var spreadsheetID sql.NullString
-	var spreadsheetURL sql.NullString
-
-	err := scanner.Scan(
-		&row.ID,
-		&row.TelegramUserID,
-		&row.ChannelID,
-		&row.ChannelTitle,
-		&row.Keyword,
-		&row.StartDate,
-		&row.Timezone,
-		&targetViews,
-		&columnsPayload,
-		&row.Status,
-		&row.ExportJWT,
-		&closedAt,
-		&closeReason,
-		&lastSnapshotAt,
-		&row.LastTotalViews,
-		&lastDailyGrowth,
-		&estimatedCloseDate,
-		&spreadsheetID,
-		&spreadsheetURL,
-		&row.CreatedAt,
-		&row.UpdatedAt,
-	)
-	if err != nil {
-		return domain.Campaign{}, fmt.Errorf("scan campaign: %w", err)
-	}
-
-	if targetViews.Valid {
-		row.TargetViews = &targetViews.Int64
-	}
-	row.Columns = parseCampaignColumns(columnsPayload)
-	if closedAt.Valid {
-		row.ClosedAt = &closedAt.Time
-	}
-	if closeReason.Valid {
-		row.CloseReason = closeReason.String
-	}
-	if lastSnapshotAt.Valid {
-		row.LastSnapshotAt = &lastSnapshotAt.Time
-	}
-	if lastDailyGrowth.Valid {
-		row.LastDailyGrowth = &lastDailyGrowth.Int64
-	}
-	if estimatedCloseDate.Valid {
-		row.EstimatedCloseDate = &estimatedCloseDate.Time
-	}
-	if spreadsheetID.Valid {
-		row.SpreadsheetID = spreadsheetID.String
-	}
-	if spreadsheetURL.Valid {
-		row.SpreadsheetURL = spreadsheetURL.String
-	}
-	return row, nil
 }
 
 func parseCampaignColumns(payload []byte) []domain.StatsColumn {
@@ -910,31 +526,176 @@ func parseCampaignColumns(payload []byte) []domain.StatsColumn {
 	return domain.NormalizeStatsColumns(columns)
 }
 
-func nullableTime(value *time.Time) any {
-	if value == nil {
-		return nil
+func userChannelFromRow(row postgres_sqlc.TelegramUserChannel) domain.UserChannel {
+	return domain.UserChannel{
+		ID:             row.ID,
+		TelegramUserID: row.TelegramUserID,
+		ChannelID:      row.ChannelID,
+		ChannelTitle:   row.ChannelTitle,
+		CreatedAt:      row.CreatedAt,
+		UpdatedAt:      row.UpdatedAt,
 	}
-	return value.UTC()
 }
 
-func nullableDate(value *time.Time) any {
-	if value == nil {
-		return nil
+func userSettingsFromRow(row postgres_sqlc.TelegramUserSetting) domain.UserSettings {
+	result := domain.UserSettings{
+		TelegramUserID:              row.TelegramUserID,
+		NotificationsEnabled:        row.NotificationsEnabled,
+		NotificationTime:            row.NotificationTime,
+		NotificationIntervalMinutes: int(row.NotificationIntervalMinutes),
+		Timezone:                    row.Timezone,
+		CreatedAt:                   row.CreatedAt,
+		UpdatedAt:                   row.UpdatedAt,
 	}
-	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
+	if row.GoogleEmail.Valid {
+		result.GoogleEmail = row.GoogleEmail.String
+	}
+	if row.GoogleRefreshToken.Valid {
+		result.GoogleRefreshToken = row.GoogleRefreshToken.String
+	}
+	if row.GoogleConnectedAt.Valid {
+		result.GoogleConnectedAt = &row.GoogleConnectedAt.Time
+	}
+	if row.LastNotificationSentAt.Valid {
+		result.LastNotificationSentAt = &row.LastNotificationSentAt.Time
+	}
+	return result
 }
 
-func nullableInt64(value *int64) any {
-	if value == nil {
-		return nil
+func notificationUserFromRow(row postgres_sqlc.ListNotificationUsersRow) domain.UserSettings {
+	result := domain.UserSettings{
+		TelegramUserID:              row.TelegramUserID,
+		NotificationsEnabled:        row.NotificationsEnabled,
+		NotificationTime:            row.NotificationTime,
+		NotificationIntervalMinutes: int(row.NotificationIntervalMinutes),
+		Timezone:                    row.Timezone,
+		CreatedAt:                   row.CreatedAt,
+		UpdatedAt:                   row.UpdatedAt,
 	}
-	return *value
+	if row.LastNotificationSentAt.Valid {
+		result.LastNotificationSentAt = &row.LastNotificationSentAt.Time
+	}
+	return result
 }
 
-func nullableString(value string) any {
+func campaignFromRow(row postgres_sqlc.AdCampaign) domain.Campaign {
+	result := domain.Campaign{
+		ID:             row.ID,
+		TelegramUserID: row.TelegramUserID,
+		ChannelID:      row.ChannelID,
+		ChannelTitle:   row.ChannelTitle,
+		Keyword:        row.Keyword,
+		StartDate:      row.StartDate,
+		Timezone:       row.Timezone,
+		Columns:        parseCampaignColumns(row.Columns),
+		Status:         row.Status,
+		ExportJWT:      row.ExportJwt,
+		LastTotalViews: row.LastTotalViews,
+		CreatedAt:      row.CreatedAt,
+		UpdatedAt:      row.UpdatedAt,
+	}
+	if row.TargetViews.Valid {
+		result.TargetViews = &row.TargetViews.Int64
+	}
+	if row.ClosedAt.Valid {
+		result.ClosedAt = &row.ClosedAt.Time
+	}
+	if row.CloseReason.Valid {
+		result.CloseReason = row.CloseReason.String
+	}
+	if row.LastSnapshotAt.Valid {
+		result.LastSnapshotAt = &row.LastSnapshotAt.Time
+	}
+	if row.LastDailyGrowth.Valid {
+		result.LastDailyGrowth = &row.LastDailyGrowth.Int64
+	}
+	if row.EstimatedCloseDate.Valid {
+		result.EstimatedCloseDate = &row.EstimatedCloseDate.Time
+	}
+	if row.SpreadsheetID.Valid {
+		result.SpreadsheetID = row.SpreadsheetID.String
+	}
+	if row.SpreadsheetUrl.Valid {
+		result.SpreadsheetURL = row.SpreadsheetUrl.String
+	}
+	return result
+}
+
+func snapshotFromRow(row postgres_sqlc.AdCampaignSnapshot) domain.CampaignSnapshot {
+	result := domain.CampaignSnapshot{
+		ID:         row.ID,
+		CampaignID: row.CampaignID,
+		SnapshotAt: row.SnapshotAt,
+		TotalViews: row.TotalViews,
+		CreatedAt:  row.CreatedAt,
+	}
+	if row.RemainingViews.Valid {
+		result.RemainingViews = &row.RemainingViews.Int64
+	}
+	if row.DailyGrowth.Valid {
+		result.DailyGrowth = &row.DailyGrowth.Int64
+	}
+	if row.EstimatedCloseDate.Valid {
+		result.EstimatedCloseDate = &row.EstimatedCloseDate.Time
+	}
+	return result
+}
+
+func inputSessionFromRow(row postgres_sqlc.TelegramInputSession) domain.CampaignInputSession {
+	result := domain.CampaignInputSession{
+		TelegramUserID: row.TelegramUserID,
+		Flow:           row.Flow,
+		Step:           row.Step,
+		Payload:        string(row.Payload),
+		CreatedAt:      row.CreatedAt,
+		UpdatedAt:      row.UpdatedAt,
+	}
+	if row.ExpiresAt.Valid {
+		result.ExpiresAt = &row.ExpiresAt.Time
+	}
+	return result
+}
+
+func publicSessionFromRow(row postgres_sqlc.PublicUserSession) domain.PublicUserSession {
+	result := domain.PublicUserSession{
+		ID:               row.ID,
+		TelegramUserID:   row.TelegramUserID,
+		RefreshTokenHash: row.RefreshTokenHash,
+		ExpiresAt:        row.ExpiresAt,
+		CreatedAt:        row.CreatedAt,
+		UpdatedAt:        row.UpdatedAt,
+	}
+	if row.RevokedAt.Valid {
+		result.RevokedAt = &row.RevokedAt.Time
+	}
+	return result
+}
+
+func nullableTime(value *time.Time) sql.NullTime {
+	if value == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: value.UTC(), Valid: true}
+}
+
+func nullableDate(value *time.Time) sql.NullTime {
+	if value == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC), Valid: true}
+}
+
+func nullableInt64(value *int64) sql.NullInt64 {
+	if value == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *value, Valid: true}
+}
+
+func nullableString(value string) sql.NullString {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return nil
+		return sql.NullString{}
 	}
-	return value
+	return sql.NullString{String: value, Valid: true}
 }

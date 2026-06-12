@@ -8,7 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/ra1phdd/config v0.0.0-20260611192812-faef706c8e25
-	github.com/ra1phdd/logger v0.0.0-20260612123216-afbb5f967e0c
+	github.com/ra1phdd/logger v0.0.0-20260612182212-4b1e9964e9ce
 	google.golang.org/api v0.237.0
 	gopkg.in/telebot.v4 v4.0.0-beta.9
 )

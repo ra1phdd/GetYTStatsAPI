@@ -30,3 +30,7 @@ build:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o $(BUILD_DIR)/main_linux_arm64 ./cmd/main/main.go
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o $(BUILD_DIR)/main_windows_amd64.exe ./cmd/main/main.go
 	GOOS=windows GOARCH=386 CGO_ENABLED=0 go build -o $(BUILD_DIR)/main_windows_i386.exe ./cmd/main/main.go
+
+docker-build:
+	docker buildx build --platform linux/amd64 -f deploy/Dockerfile.campaign-api -t ghcr.io/ra1phdd/ytstats-api:latest --push .
+	docker buildx build --platform linux/amd64 -f deploy/Dockerfile.telegram-bot -t ghcr.io/ra1phdd/ytstats-tg:latest --push .

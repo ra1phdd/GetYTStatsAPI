@@ -22,18 +22,22 @@ func TestLoadMergesConfigAndSecurityFiles(t *testing.T) {
 		"http": {"address": ":8080"},
 		"database": {"host": "127.0.0.1", "port": 5432, "user": "app", "name": "stats", "options": {"sslmode": "disable"}},
 		"notifications": {"webhook_url": "http://127.0.0.1:8081"},
-		"internal": {"service_id": "campaign-api", "peer_service_id": "telegram-bot"},
+		"internal": {"api": {"service_id": "campaign-api", "peer_service_id": "telegram-bot"}},
 		"public_base_url": "http://127.0.0.1:8080"
 	}`
 	securityData := strings.TrimSpace(`
 database:
   password: db-secret
 youtube_api_key: yt-secret
-telegram_auth:
+telegram:
   bot_token: tg-secret
 internal:
-  service_secret: api-secret
-  peer_service_secret: bot-secret
+  api:
+    service_secret: api-secret
+    peer_service_secret: bot-secret
+  bot:
+    service_secret: bot-secret
+    peer_service_secret: api-secret
 export_jwt_secret: export-secret
 access_jwt_secret: access-secret
 refresh_jwt_secret: refresh-secret
@@ -97,12 +101,16 @@ func TestLoaderSaveKeepsSecretsOutOfConfigJSON(t *testing.T) {
 	cfg.Database.Password = *NewSecureString("db-secret")
 	cfg.Database.Name = "stats"
 	cfg.YouTubeAPIKey = *NewSecureString("yt-secret")
-	cfg.TelegramAuth.BotToken = *NewSecureString("tg-secret")
+	cfg.Telegram.BotToken = *NewSecureString("tg-secret")
 	cfg.Notifications.WebhookURL = "http://127.0.0.1:8081"
-	cfg.Internal.ServiceID = "campaign-api"
-	cfg.Internal.ServiceSecret = *NewSecureString("api-secret")
-	cfg.Internal.PeerServiceID = "telegram-bot"
-	cfg.Internal.PeerServiceSecret = *NewSecureString("bot-secret")
+	cfg.Internal.API.ServiceID = "campaign-api"
+	cfg.Internal.API.ServiceSecret = *NewSecureString("api-secret")
+	cfg.Internal.API.PeerServiceID = "telegram-bot"
+	cfg.Internal.API.PeerServiceSecret = *NewSecureString("bot-secret")
+	cfg.Internal.Bot.ServiceID = "telegram-bot"
+	cfg.Internal.Bot.ServiceSecret = *NewSecureString("bot-secret")
+	cfg.Internal.Bot.PeerServiceID = "campaign-api"
+	cfg.Internal.Bot.PeerServiceSecret = *NewSecureString("api-secret")
 	cfg.PublicBaseURL = "http://127.0.0.1:8080"
 	cfg.ExportJWTSecret = *NewSecureString("export-secret")
 	cfg.AccessJWTSecret = *NewSecureString("access-secret")
@@ -194,11 +202,12 @@ func TestLoadTelegramConfig(t *testing.T) {
 
 	configData := `{
 		"logger_level": "debug",
-		"webhook": {"address": ":8081"},
+		"http": {"address": ":8081"},
+		"notifications": {"webhook_url": "http://127.0.0.1:8081"},
 		"api": {"base_url": "http://127.0.0.1:8080"},
-		"internal": {"service_id": "telegram-bot", "peer_service_id": "campaign-api"}
+		"internal": {"bot": {"service_id": "telegram-bot", "peer_service_id": "campaign-api"}}
 	}`
-	securityData := "token: tg-secret\ninternal:\n  service_secret: bot-secret\n  peer_service_secret: api-secret\n"
+	securityData := "telegram:\n  bot_token: tg-secret\ninternal:\n  bot:\n    service_secret: bot-secret\n    peer_service_secret: api-secret\n"
 
 	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
 		t.Fatal(err)
@@ -224,8 +233,11 @@ func TestLoadTelegramConfig(t *testing.T) {
 	if cfg.LoggerLevel != "debug" {
 		t.Fatalf("LoggerLevel = %q, want debug", cfg.LoggerLevel)
 	}
-	if got := cfg.Token.String(); got != "tg-secret" {
-		t.Fatalf("Token = %q, want tg-secret", got)
+	if cfg.HTTP.Address != ":8081" {
+		t.Fatalf("HTTP.Address = %q, want :8081", cfg.HTTP.Address)
+	}
+	if got := cfg.Telegram.BotToken.String(); got != "tg-secret" {
+		t.Fatalf("Telegram.BotToken = %q, want tg-secret", got)
 	}
 }
 

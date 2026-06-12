@@ -19,6 +19,9 @@ const (
 
 	DefaultUserTimezone         = "Europe/Moscow"
 	DefaultNotificationTime     = "12:00"
+	DefaultNotificationInterval = 24 * time.Hour
+	MinNotificationInterval     = 3 * time.Hour
+	MaxNotificationInterval     = 7 * 24 * time.Hour
 	DefaultCampaignsPageSize    = 7
 	DefaultAccessTokenLifetime  = 15 * time.Minute
 	DefaultRefreshTokenLifetime = 30 * 24 * time.Hour
@@ -34,24 +37,26 @@ type UserChannel struct {
 }
 
 type UserSettings struct {
-	TelegramUserID         int64      `json:"telegram_user_id"`
-	NotificationsEnabled   bool       `json:"notifications_enabled"`
-	NotificationTime       string     `json:"notification_time"`
-	Timezone               string     `json:"timezone"`
-	GoogleEmail            string     `json:"google_email,omitempty"`
-	GoogleRefreshToken     string     `json:"-"`
-	GoogleConnectedAt      *time.Time `json:"google_connected_at,omitempty"`
-	LastNotificationSentAt *time.Time `json:"last_notification_sent_at,omitempty"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
+	TelegramUserID              int64      `json:"telegram_user_id"`
+	NotificationsEnabled        bool       `json:"notifications_enabled"`
+	NotificationTime            string     `json:"notification_time"`
+	NotificationIntervalMinutes int        `json:"notification_interval_minutes"`
+	Timezone                    string     `json:"timezone"`
+	GoogleEmail                 string     `json:"google_email,omitempty"`
+	GoogleRefreshToken          string     `json:"-"`
+	GoogleConnectedAt           *time.Time `json:"google_connected_at,omitempty"`
+	LastNotificationSentAt      *time.Time `json:"last_notification_sent_at,omitempty"`
+	CreatedAt                   time.Time  `json:"created_at"`
+	UpdatedAt                   time.Time  `json:"updated_at"`
 }
 
 func DefaultUserSettings(userID int64) UserSettings {
 	return UserSettings{
-		TelegramUserID:       userID,
-		NotificationsEnabled: true,
-		NotificationTime:     DefaultNotificationTime,
-		Timezone:             DefaultUserTimezone,
+		TelegramUserID:              userID,
+		NotificationsEnabled:        true,
+		NotificationTime:            DefaultNotificationTime,
+		NotificationIntervalMinutes: int(DefaultNotificationInterval / time.Minute),
+		Timezone:                    DefaultUserTimezone,
 	}
 }
 
@@ -242,4 +247,41 @@ func ParseNotificationTime(value string) (int, int, error) {
 	}
 
 	return hour, minute, nil
+}
+
+func NormalizeNotificationIntervalMinutes(value int) int {
+	if value <= 0 {
+		return int(DefaultNotificationInterval / time.Minute)
+	}
+	return value
+}
+
+func ValidateNotificationIntervalMinutes(value int) error {
+	duration := time.Duration(NormalizeNotificationIntervalMinutes(value)) * time.Minute
+	if duration < MinNotificationInterval || duration > MaxNotificationInterval {
+		return fmt.Errorf("notification interval must be between %s and %s", FormatNotificationInterval(MinNotificationInterval), FormatNotificationInterval(MaxNotificationInterval))
+	}
+	return nil
+}
+
+func FormatNotificationInterval(value time.Duration) string {
+	if value%(24*time.Hour) == 0 {
+		days := int(value / (24 * time.Hour))
+		if days == 1 {
+			return "1 day"
+		}
+		return fmt.Sprintf("%d days", days)
+	}
+	if value%time.Hour == 0 {
+		hours := int(value / time.Hour)
+		if hours == 1 {
+			return "1 hour"
+		}
+		return fmt.Sprintf("%d hours", hours)
+	}
+	minutes := int(value / time.Minute)
+	if minutes == 1 {
+		return "1 minute"
+	}
+	return fmt.Sprintf("%d minutes", minutes)
 }

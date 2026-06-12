@@ -400,6 +400,8 @@ github.com/ra1phdd/logger v0.0.0-20260611195102-74a30d8ef4e4 h1:G9/MUQQHEnrkqGmU
 github.com/ra1phdd/logger v0.0.0-20260611195102-74a30d8ef4e4/go.mod h1:AGh4mw90lfJnSkmjxFyx0kyt7AZ+X2FTQ/FGvEAS9Xc=
 github.com/ra1phdd/logger v0.0.0-20260612123216-afbb5f967e0c h1:UTsitdf7CXSfhMRNlPKQtln2SrUdn/zHuK8sVbANhCs=
 github.com/ra1phdd/logger v0.0.0-20260612123216-afbb5f967e0c/go.mod h1:AGh4mw90lfJnSkmjxFyx0kyt7AZ+X2FTQ/FGvEAS9Xc=
+github.com/ra1phdd/logger v0.0.0-20260612182212-4b1e9964e9ce h1:v7TRHTryMLlnWfpHe1Ak5Dcp+/BT+EAfQDaTwYCr+jo=
+github.com/ra1phdd/logger v0.0.0-20260612182212-4b1e9964e9ce/go.mod h1:AGh4mw90lfJnSkmjxFyx0kyt7AZ+X2FTQ/FGvEAS9Xc=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/rogpeppe/fastuuid v1.2.0/go.mod h1:jVj6XXZzXRy/MSR5jhDC/2q6DgLz+nrA6LYCDYWNEvQ=

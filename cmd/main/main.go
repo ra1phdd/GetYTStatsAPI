@@ -18,7 +18,6 @@ import (
 	postgres_stats_repository "getytstatsapi/internal/entities/stats/repository/postgres"
 	youtube_stats_repository "getytstatsapi/internal/entities/stats/repository/youtube"
 	stats_service "getytstatsapi/internal/entities/stats/service"
-	stats_http "getytstatsapi/internal/entities/stats/transport/http"
 	userauth_service "getytstatsapi/internal/entities/userauth/service"
 	"net/http"
 	"os/signal"
@@ -73,34 +72,29 @@ func main() {
 	recordingRepository := postgres_stats_repository.NewRecorder(statsRepository, historyStore)
 	sponsorBlockRepository := sponsorblock_repository.New("")
 	statsService := stats_service.New(recordingRepository, sponsorBlockRepository)
-	statsHandler := stats_http.NewHandler(log.Named("stats.http"), statsService)
-
-	apiV1.RegisterRoutes(
-		core_http_server.NewRoute(http.MethodGet, "/stats/get", statsHandler.GetStats),
-	)
 
 	campaignStore := campaign_postgres.NewStore(db)
 	googleRedirectURL := cfg.GoogleOAuth.RedirectURL
 	if strings.TrimSpace(googleRedirectURL) == "" {
-		googleRedirectURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/") + "/v1/google/callback"
+		googleRedirectURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/") + "/v1/callback"
 	}
 	googleClient := campaign_google.New(cfg.GoogleOAuth.ClientID, cfg.GoogleOAuth.ClientSecret.String(), googleRedirectURL)
 	campaigns := campaign_service.New(campaignStore, statsService, statsRepository, googleClient, cfg.ExportJWTSecret.String(), cfg.PublicBaseURL, cfg.AccessJWTSecret.String())
-	authService := userauth_service.New(campaignStore, cfg.TelegramAuth.BotToken.String(), cfg.AccessJWTSecret.String(), cfg.RefreshJWTSecret.String())
+	authService := userauth_service.New(campaignStore, cfg.Telegram.BotToken.String(), cfg.AccessJWTSecret.String(), cfg.RefreshJWTSecret.String())
 	campaignHandler := campaign_http.NewHandler(
 		log.Named("campaign.http"),
 		campaigns,
 		authService,
 		cfg.PublicBaseURL,
-		cfg.Internal.PeerServiceID,
-		cfg.Internal.PeerServiceSecret.String(),
+		cfg.Internal.API.PeerServiceID,
+		cfg.Internal.API.PeerServiceSecret.String(),
 	)
 
 	apiV1.RegisterRoutes(
 		core_http_server.NewRoute(http.MethodPost, "/auth/telegram", campaignHandler.AuthTelegram),
 		core_http_server.NewRoute(http.MethodPost, "/auth/refresh", campaignHandler.AuthRefresh),
 		core_http_server.NewRoute(http.MethodPost, "/auth/logout", campaignHandler.AuthLogout),
-		core_http_server.NewRoute(http.MethodGet, "/google/callback", campaignHandler.CompleteGoogleLink),
+		core_http_server.NewRoute(http.MethodGet, "/callback", campaignHandler.CompleteGoogleLink),
 		core_http_server.NewRoute(http.MethodGet, "/me", campaignHandler.Me),
 		core_http_server.NewRoute(http.MethodGet, "/users/{user_id}/channels", campaignHandler.GetUserChannels),
 		core_http_server.NewRoute(http.MethodPost, "/users/{user_id}/channels/resolve", campaignHandler.ResolveUserChannel),
@@ -113,6 +107,8 @@ func main() {
 		core_http_server.NewRoute(http.MethodGet, "/users/{user_id}/campaigns/{campaign_id}", campaignHandler.GetUserCampaign),
 		core_http_server.NewRoute(http.MethodPost, "/users/{user_id}/campaigns/{campaign_id}/close", campaignHandler.CloseUserCampaign),
 		core_http_server.NewRoute(http.MethodPost, "/users/{user_id}/campaigns/{campaign_id}/refresh", campaignHandler.RefreshUserCampaign),
+		core_http_server.NewRoute(http.MethodPatch, "/users/{user_id}/campaigns/{campaign_id}/columns", campaignHandler.UpdateUserCampaignColumns),
+		core_http_server.NewRoute(http.MethodPatch, "/users/{user_id}/campaigns/{campaign_id}/target", campaignHandler.UpdateUserCampaignTarget),
 		core_http_server.NewRoute(http.MethodPost, "/users/{user_id}/campaigns/{campaign_id}/spreadsheet", campaignHandler.CreateCampaignSpreadsheet),
 		core_http_server.NewRoute(http.MethodGet, "/users/{user_id}/settings", campaignHandler.GetUserSettings),
 		core_http_server.NewRoute(http.MethodPatch, "/users/{user_id}/settings", campaignHandler.PatchUserSettings),
@@ -137,8 +133,8 @@ func main() {
 
 	botNotifier := campaign_bot_client.New(
 		cfg.Notifications.WebhookURL,
-		cfg.Internal.ServiceID,
-		cfg.Internal.ServiceSecret.String(),
+		cfg.Internal.API.ServiceID,
+		cfg.Internal.API.ServiceSecret.String(),
 	)
 	go runNotificationLoop(ctx, log.Named("campaign.notifications"), campaigns, botNotifier)
 

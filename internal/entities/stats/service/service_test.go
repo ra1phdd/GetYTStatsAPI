@@ -43,16 +43,33 @@ func TestBuildCSV(t *testing.T) {
 	}
 
 	got := string(data)
-	if !strings.Contains(got, "Общее количество просмотров:") || !strings.Contains(got, ",25,") {
+	if strings.Contains(got, "Общее количество просмотров:") || !strings.Contains(got, ",25,") {
 		t.Fatalf("BuildCSV() missing total views footer, got %q", got)
 	}
 	if !strings.Contains(got, "'2025-01-02 15:04") {
 		t.Fatalf("BuildCSV() missing formatted publish date, got %q", got)
 	}
-	if !strings.Contains(got, "00:05.500-00:18.250") {
+	if !strings.Contains(got, "00:05-00:18") {
 		t.Fatalf("BuildCSV() missing ad timings, got %q", got)
 	}
 	if !strings.Contains(got, "Дата обновления просмотров") {
 		t.Fatalf("BuildCSV() missing custom header, got %q", got)
+	}
+	if strings.Count(got, "'2025-01-05 10:30") != 1 {
+		t.Fatalf("BuildCSV() duplicated views updated at value, got %q", got)
+	}
+}
+
+func TestFormatSponsorTimingsUsesClockFormat(t *testing.T) {
+	t.Parallel()
+
+	got := formatSponsorTimings([]domain.SponsorBlockSegment{
+		domain.NewSponsorBlockSegment("intro", "intro", "skip", 10, 20, 5000, 0, 0, ""),
+		domain.NewSponsorBlockSegment("s1", "sponsor", "skip", 137.735, 161.146, 3553.561, 0, 2, ""),
+		domain.NewSponsorBlockSegment("s2", "sponsor", "skip", 3661.9, 3725.2, 4000, 0, 1, ""),
+	})
+
+	if got != "02:17-02:41, 01:01:01-01:02:05" {
+		t.Fatalf("formatSponsorTimings() = %q", got)
 	}
 }

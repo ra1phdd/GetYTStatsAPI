@@ -1,0 +1,9 @@
+{
+  "logger_level": "warn",
+  "http": {
+    "address": ":8080"
+  },
+  "web": {
+    "root": "{PWD}/web/dist"
+  }
+}

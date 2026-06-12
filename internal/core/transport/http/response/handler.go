@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	core_errors "getytstatsapi/internal/core/errors"
-	"getytstatsapi/pkg/logger"
+	"github.com/ra1phdd/logger"
 	"net/http"
 )
 

@@ -3,7 +3,7 @@ package core_http_middleware
 import (
 	"context"
 	core_http_response "getytstatsapi/internal/core/transport/http/response"
-	"getytstatsapi/pkg/logger"
+	"github.com/ra1phdd/logger"
 	"net/http"
 	"time"
 

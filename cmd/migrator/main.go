@@ -16,16 +16,13 @@ func main() {
 	dir := flag.String("dir", "migrations", "path to migrations directory")
 	flag.Parse()
 
-	store, err := core_config.LoadStore()
+	loader, err := core_config.NewLoader(core_config.MainConfig)
 	if err != nil {
 		panic(err)
 	}
 
-	var cfg *core_config.Config
-	if err := store.Read(func(readCfg *core_config.Config) error {
-		cfg = readCfg
-		return nil
-	}); err != nil {
+	cfg, err := loader.Load()
+	if err != nil {
 		panic(err)
 	}
 

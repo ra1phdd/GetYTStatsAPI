@@ -1,9 +1,11 @@
+bin/
 build/
 logs/
-.idea/
+
 .gocache/
 .tmp/
 .session/
+.cache/
 
 .env
 config.json
@@ -12,3 +14,11 @@ config.yml
 .security.json
 .security.yaml
 .security.yml
+
+.DS_Store
+
+.vscode/
+.idea/
+
+dist/
+*.vite/

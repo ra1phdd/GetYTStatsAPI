@@ -1,37 +1,42 @@
 package config
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
 
-	base "getytstatsapi/pkg/config"
+	base "github.com/ra1phdd/config"
 )
 
 type SecureString = base.SecureString
 
 var NewSecureString = base.NewSecureString
 
-type Config struct {
-	LoggerLevel string          `json:"logger_level" yaml:"logger_level" env:"LOGGER_LEVEL"`
-	HTTP        HTTPConfig      `json:"http" yaml:"http" envPrefix:"HTTP_"`
-	Database    Database        `json:"database" yaml:"database" envPrefix:"DATABASE_"`
-	Features    FeaturesConfig  `json:"features" yaml:"features" envPrefix:"FEATURES_"`
-	ChatUsers   ChatUsersConfig `json:"chat_users,omitempty" yaml:"chat_users,omitempty"`
-	runtimeRefs runtimeRefs
+type Main struct {
+	LoggerLevel   string       `json:"logger_level" yaml:"logger_level" env:"LOGGER_LEVEL"`
+	HTTP          HTTP         `json:"http" yaml:"http" envPrefix:"HTTP_"`
+	Database      Database     `json:"database" yaml:"database" envPrefix:"DATABASE_"`
+	YouTubeAPIKey SecureString `json:"youtube_api_key,omitzero" yaml:"youtube_api_key,omitempty" env:"YOUTUBE_API_KEY"`
 }
 
-type runtimeRefs struct {
-	ChatUsers string
+type HTTPServer struct {
+	LoggerLevel string `json:"logger_level" yaml:"logger_level" env:"LOGGER_LEVEL"`
+	HTTP        HTTP   `json:"http" yaml:"http" envPrefix:"HTTP_"`
+	Web         Web    `json:"web" yaml:"web" envPrefix:"WEB_"`
 }
 
-type HTTPConfig struct {
+type Telegram struct {
+	LoggerLevel string       `json:"logger_level" yaml:"logger_level" env:"LOGGER_LEVEL"`
+	Token       SecureString `json:"token,omitzero" yaml:"token,omitempty" env:"TELEGRAM_TOKEN"`
+}
+
+type HTTP struct {
 	Address string `json:"address" yaml:"address" env:"ADDRESS"`
-	BaseURL string `json:"base_url,omitempty" yaml:"base_url,omitempty" env:"BASE_URL"`
+}
+
+type Web struct {
+	Root string `json:"root" yaml:"root" env:"ROOT"`
 }
 
 type Database struct {
@@ -41,24 +46,6 @@ type Database struct {
 	Password SecureString      `json:"password,omitzero" yaml:"password,omitempty" env:"PASSWORD"`
 	Name     string            `json:"name" yaml:"name" env:"NAME"`
 	Options  map[string]string `json:"options,omitempty" yaml:"options,omitempty"`
-}
-
-type FeaturesConfig struct {
-	StintInside StintInsideFeatureConfig `json:"stintinside" yaml:"stintinside" envPrefix:"STINTINSIDE_"`
-}
-
-type StintInsideFeatureConfig struct {
-	YouTubeAPIKey SecureString `json:"youtube_api_key,omitzero" yaml:"youtube_api_key,omitempty" env:"YOUTUBE_API_KEY"`
-}
-
-type ChatUsersConfig map[int64]map[int64]KnownUser
-
-type KnownUser struct {
-	ID        int64  `json:"id" yaml:"id"`
-	FirstName string `json:"first_name,omitempty" yaml:"first_name,omitempty"`
-	LastName  string `json:"last_name,omitempty" yaml:"last_name,omitempty"`
-	Username  string `json:"username,omitempty" yaml:"username,omitempty"`
-	IsBot     bool   `json:"is_bot,omitempty" yaml:"is_bot,omitempty"`
 }
 
 func (d Database) DSN() string {
@@ -89,7 +76,7 @@ func (d Database) DSN() string {
 	return u.String()
 }
 
-func (c *Config) Validate() error {
+func (c *Main) Validate() error {
 	if c == nil {
 		return base.ErrNilConfig
 	}
@@ -114,81 +101,33 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func (c *Config) EnsureData() {
-	if c.ChatUsers == nil {
-		c.ChatUsers = make(ChatUsersConfig)
+func (c *HTTPServer) Validate() error {
+	if c == nil {
+		return base.ErrNilConfig
 	}
-}
-
-func (c *Config) MarshalJSON() ([]byte, error) {
-	if c != nil {
-		c.EnsureData()
+	if strings.TrimSpace(c.HTTP.Address) == "" {
+		return fmt.Errorf("%w: http.address is required", base.ErrInvalidConfig)
 	}
-	type Alias Config
-	type runtimeAlias struct {
-		*Alias
-
-		ChatUsers any `json:"chat_users,omitempty"`
-	}
-	chatUsers := any(c.ChatUsers)
-	if c.runtimeRefs.ChatUsers != "" {
-		chatUsers = c.runtimeRefs.ChatUsers
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(runtimeAlias{Alias: (*Alias)(c), ChatUsers: chatUsers}); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
-}
-
-func (c *Config) UnmarshalJSON(data []byte) error {
-	type Alias Config
-	aux := struct {
-		*Alias
-
-		ChatUsers json.RawMessage `json:"chat_users"`
-	}{Alias: (*Alias)(c)}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if len(aux.ChatUsers) > 0 && string(aux.ChatUsers) != "null" {
-		ref, ok, err := decodeRuntimeRef(aux.ChatUsers)
-		if err != nil {
-			return fmt.Errorf("chat_users: %w", err)
-		}
-		if ok {
-			c.runtimeRefs.ChatUsers = ref
-			c.ChatUsers = nil
-		} else if err := json.Unmarshal(aux.ChatUsers, &c.ChatUsers); err != nil {
-			return fmt.Errorf("chat_users: %w", err)
-		}
+	if strings.TrimSpace(c.Web.Root) == "" {
+		return fmt.Errorf("%w: web.root is required", base.ErrInvalidConfig)
 	}
 	return nil
 }
 
-func decodeRuntimeRef(data []byte) (string, bool, error) {
-	var ref string
-	if err := json.Unmarshal(data, &ref); err != nil {
-		return "", false, err
+func (c *Telegram) Validate() error {
+	if c == nil {
+		return base.ErrNilConfig
 	}
-
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return "", false, nil
+	if strings.TrimSpace(c.Token.String()) == "" {
+		return fmt.Errorf("%w: token is required", base.ErrInvalidConfig)
 	}
-
-	if !strings.HasPrefix(ref, "file://") {
-		return "", false, errors.New("only file:// references are supported")
-	}
-	return ref, true, nil
+	return nil
 }
 
-func DefaultConfig() *Config {
-	cfg := &Config{
+func DefaultMain() *Main {
+	cfg := &Main{
 		LoggerLevel: "warn",
-		HTTP: HTTPConfig{
+		HTTP: HTTP{
 			Address: ":80",
 		},
 		Database: Database{
@@ -200,6 +139,30 @@ func DefaultConfig() *Config {
 			},
 		},
 	}
-	cfg.EnsureData()
+
 	return cfg
+}
+
+func DefaultHTTP() *HTTPServer {
+	return &HTTPServer{
+		LoggerLevel: "warn",
+		HTTP: HTTP{
+			Address: ":8080",
+		},
+		Web: Web{
+			Root: "{PWD}/web/dist",
+		},
+	}
+}
+
+func DefaultTelegram() *Telegram {
+	return &Telegram{
+		LoggerLevel: "warn",
+	}
+}
+
+type Config = Main
+
+func DefaultConfig() *Config {
+	return DefaultMain()
 }

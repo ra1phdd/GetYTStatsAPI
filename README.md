@@ -36,6 +36,7 @@ DATABASE_USER=postgres
 DATABASE_PASSWORD=postgres
 DATABASE_NAME=getytstatsapi
 FEATURES_STINTINSIDE_YOUTUBE_API_KEY=YOUR_YOUTUBE_DATA_API_V3_KEY
+TELEGRAM_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
 ```
 **Примечание**: Значения `DATABASE_*` и `FEATURES_STINTINSIDE_YOUTUBE_API_KEY` должны быть заданы.
 
@@ -46,6 +47,11 @@ go run ./cmd/migrator -direction up
 - Запустите Backend:
 ```
 go run ./cmd/main
+```
+
+- Запустите Telegram-бота:
+```
+go run ./cmd/tg
 ```
 
 # Лицензия

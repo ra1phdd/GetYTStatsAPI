@@ -14,31 +14,28 @@ import (
 	youtube_stats_repository "getytstatsapi/internal/entities/stats/repository/youtube"
 	stats_service "getytstatsapi/internal/entities/stats/service"
 	stats_http "getytstatsapi/internal/entities/stats/transport/http"
-	"getytstatsapi/pkg/logger"
 	"net/http"
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"github.com/ra1phdd/logger"
 )
 
 func main() {
-	store, err := core_config.LoadStore()
+	loader, err := core_config.NewLoader(core_config.MainConfig)
 	if err != nil {
 		panic(err)
 	}
 
-	var cfg *core_config.Config
-	if err := store.Read(func(readCfg *core_config.Config) error {
-		cfg = readCfg
-		return nil
-	}); err != nil {
+	cfg, err := loader.Load()
+	if err != nil {
 		panic(err)
 	}
 
 	log := logger.New(
 		logger.WithComponent("app"),
 		logger.WithLevelString(cfg.LoggerLevel),
-		logger.WithFile(core_config.ResolvePath("logs/app.log")),
 	)
 
 	db, err := postgres.Open(cfg.Database.DSN())
@@ -56,10 +53,10 @@ func main() {
 		core_http_server.NewRoute(http.MethodGet, "/health", healthHandler.Get),
 	)
 
-	if strings.TrimSpace(cfg.Features.StintInside.YouTubeAPIKey.String()) == "" {
+	if strings.TrimSpace(cfg.YouTubeAPIKey.String()) == "" {
 		log.Warn("stats routes are disabled: youtube api key is empty")
 	} else {
-		statsRepository, err := youtube_stats_repository.New(context.Background(), cfg.Features.StintInside.YouTubeAPIKey.String())
+		statsRepository, err := youtube_stats_repository.New(context.Background(), cfg.YouTubeAPIKey.String())
 		if err != nil {
 			panic(err)
 		}

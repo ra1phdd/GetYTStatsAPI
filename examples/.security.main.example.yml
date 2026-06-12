@@ -1,0 +1,3 @@
+database:
+  password: your-database-password
+youtube_api_key: your-youtube-api-key

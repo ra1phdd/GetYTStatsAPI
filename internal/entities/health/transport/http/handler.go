@@ -6,7 +6,7 @@ import (
 
 	core_http_response "getytstatsapi/internal/core/transport/http/response"
 	health_service "getytstatsapi/internal/entities/health/service"
-	"getytstatsapi/pkg/logger"
+	"github.com/ra1phdd/logger"
 )
 
 type Handler struct {

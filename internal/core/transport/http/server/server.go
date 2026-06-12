@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	core_http_middleware "getytstatsapi/internal/core/transport/http/middleware"
-	"getytstatsapi/pkg/logger"
+	"github.com/ra1phdd/logger"
 	"net/http"
 	"time"
 )

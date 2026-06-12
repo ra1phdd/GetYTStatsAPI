@@ -1,0 +1,16 @@
+{
+  "logger_level": "warn",
+  "http": {
+    "address": ":80"
+  },
+  "database": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "app",
+    "name": "getytstatsapi",
+    "options": {
+      "sslmode": "disable",
+      "prefer_simple_protocol": "true"
+    }
+  }
+}

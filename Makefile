@@ -1,4 +1,4 @@
-.PHONY: test cover build protos
+.PHONY: test cover build protos http
 
 # Переменные
 BUILD_DIR := build
@@ -15,6 +15,10 @@ cover:
 protos:
 	protoc --go_out=. --go-grpc_out=. protos/server_v1.proto
 	protoc --go_out=. --go-grpc_out=. protos/client_v1.proto
+
+http:
+	npm --prefix web run build
+	go run ./cmd/http
 
 # Сборка
 build:

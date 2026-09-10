@@ -853,7 +853,7 @@ func (s *Service) dailyGrowthBaselineSnapshot(ctx context.Context, campaign doma
 	if candidate, err := s.store.GetPreviousSnapshot(ctx, campaign.ID, todayStart.UTC()); err == nil {
 		candidateDay := startOfDay(candidate.SnapshotAt.In(loc))
 		if candidateDay.Equal(yesterdayStart) {
-			return candidate, false, true, nil
+			return candidate, true, true, nil
 		}
 	} else if !errors.Is(err, core_errors.ErrNotFound) {
 		return domain.CampaignSnapshot{}, false, false, err

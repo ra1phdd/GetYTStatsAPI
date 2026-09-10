@@ -304,7 +304,7 @@ func TestRefreshCampaignNormalizesDailyGrowthToPerDay(t *testing.T) {
 	}
 }
 
-func TestRefreshCampaignUsesPreviousDaySnapshotForDailyGrowth(t *testing.T) {
+func TestRefreshCampaignNormalizesPreviousDaySnapshotToPerDay(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 6, 13, 15, 0, 0, 0, time.UTC)
@@ -327,14 +327,14 @@ func TestRefreshCampaignUsesPreviousDaySnapshotForDailyGrowth(t *testing.T) {
 	if snapshot.DailyGrowth == nil {
 		t.Fatal("snapshot.DailyGrowth = nil, want value")
 	}
-	if *snapshot.DailyGrowth != 100 {
-		t.Fatalf("snapshot.DailyGrowth = %d, want 100", *snapshot.DailyGrowth)
+	if *snapshot.DailyGrowth != 104 {
+		t.Fatalf("snapshot.DailyGrowth = %d, want 104", *snapshot.DailyGrowth)
 	}
-	if store.lastSavedSnapshot.DailyGrowth == nil || *store.lastSavedSnapshot.DailyGrowth != 100 {
-		t.Fatalf("saved snapshot daily growth = %v, want 100", store.lastSavedSnapshot.DailyGrowth)
+	if store.lastSavedSnapshot.DailyGrowth == nil || *store.lastSavedSnapshot.DailyGrowth != 104 {
+		t.Fatalf("saved snapshot daily growth = %v, want 104", store.lastSavedSnapshot.DailyGrowth)
 	}
-	if updated.LastDailyGrowth == nil || *updated.LastDailyGrowth != 100 {
-		t.Fatalf("updated.LastDailyGrowth = %v, want 100", updated.LastDailyGrowth)
+	if updated.LastDailyGrowth == nil || *updated.LastDailyGrowth != 104 {
+		t.Fatalf("updated.LastDailyGrowth = %v, want 104", updated.LastDailyGrowth)
 	}
 }
 
